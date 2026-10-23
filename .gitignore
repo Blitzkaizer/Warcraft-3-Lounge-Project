@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# Build and Dist
+build/
+dist/Warcraft3Lounge/
+dist/*.exe
+
+# AppData & Temporary Local Storage
+*.log
+local_accounts.json
+auth_session.json
+friends.json
+settings.json
+launcher_config.json
+
+# IDE & OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
