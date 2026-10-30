@@ -112,7 +112,7 @@ class STUNClient:
 
                     if endpoint:
                         pub_ip, pub_port = endpoint
-                        lan_ip = cls.get_lan_ip() if hasattr(cls, "get_lan_ip") else STUNClient.get_lan_ip()
+                        lan_ip = STUNClient.get_lan_ip()
                         logger.info(f"STUN discovery via {host}:{port} -> Public: {pub_ip}:{pub_port} (LAN: {lan_ip}, Local: {local_port})")
                         return STUNResult(
                             public_ip=pub_ip,
