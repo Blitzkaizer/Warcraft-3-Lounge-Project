@@ -1,0 +1,53 @@
+name: Build & Release Warcraft III Lounge
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run Test Suite
+        run: |
+          python -m pytest tests/ -v
+
+      - name: Build Windows Executable (PyInstaller)
+        run: |
+          python -m PyInstaller Warcraft3Lounge.spec --noconfirm
+
+      - name: Package Release Zip
+        shell: powershell
+        run: |
+          $Tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.0.1" }
+          $ZipName = "Warcraft3Lounge_Setup_${Tag}.zip"
+          Compress-Archive -Path "dist\Warcraft3Lounge\*" -DestinationPath "dist\$ZipName" -Force
+          Write-Host "Created release package: dist\$ZipName"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Warcraft3Lounge_Setup_*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
