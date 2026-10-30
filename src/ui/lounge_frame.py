@@ -31,6 +31,128 @@ from ..launcher.game_launcher import GameLauncher
 from ..network.lobby_service import LobbyRoom, LobbyService
 from ..network.lounge_session import LoungeSession
 
+class PrivateChatDialog(ctk.CTkToplevel):
+    """
+    Ephemeral Direct Message Dialog.
+    Strictly in-memory (RAM only) - messages are destroyed when window is closed.
+    Never persisted to disk or cloud database.
+    """
+
+    def __init__(
+        self,
+        master,
+        current_username: str,
+        friend_name: str,
+        friend_manager: FriendManager,
+        on_close: Optional[Callable[[str], None]] = None
+    ):
+        super().__init__(master)
+        self.current_username = current_username
+        self.friend_name = friend_name
+        self.friend_manager = friend_manager
+        self.on_close = on_close
+
+        self.title(f"💬 Private Chat - {self.friend_name}")
+        self.geometry("420x480")
+        self.minsize(380, 360)
+        self.configure(fg_color="#18191c")
+
+        # Top Header
+        header = ctk.CTkFrame(self, fg_color="#202225", corner_radius=0, height=52)
+        header.pack(fill="x", side="top")
+        header.pack_propagate(False)
+
+        title_lbl = ctk.CTkLabel(
+            header,
+            text=f"💬 {self.friend_name}",
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color="#ffffff"
+        )
+        title_lbl.pack(side="left", padx=14, pady=8)
+
+        notice_lbl = ctk.CTkLabel(
+            header,
+            text="🔒 Ephemeral Chat (Destroyed on Close)",
+            font=ctk.CTkFont(family="Segoe UI", size=10, slant="italic"),
+            text_color="#8e9297"
+        )
+        notice_lbl.pack(side="right", padx=14, pady=8)
+
+        # Message History (Read-Only Textbox)
+        self.chat_display = ctk.CTkTextbox(
+            self,
+            fg_color="#2f3136",
+            text_color="#dcddde",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            wrap="word",
+            corner_radius=8
+        )
+        self.chat_display.pack(fill="both", expand=True, padx=12, pady=(10, 8))
+        self.chat_display.configure(state="disabled")
+
+        # Bottom Input Row
+        input_frame = ctk.CTkFrame(self, fg_color="transparent")
+        input_frame.pack(fill="x", side="bottom", padx=12, pady=(0, 12))
+
+        self.msg_entry = ctk.CTkEntry(
+            input_frame,
+            placeholder_text=f"Message @{self.friend_name}...",
+            fg_color="#40444b",
+            border_color="#202225",
+            text_color="#ffffff",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            height=36
+        )
+        self.msg_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.msg_entry.bind("<Return>", lambda e: self._send_message())
+
+        send_btn = ctk.CTkButton(
+            input_frame,
+            text="Send",
+            width=70,
+            height=36,
+            fg_color="#5865f2",
+            hover_color="#4752c4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self._send_message
+        )
+        send_btn.pack(side="right")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        self.msg_entry.focus_set()
+
+    def append_message(self, sender: str, text: str, is_error: bool = False):
+        t_str = time.strftime("%H:%M")
+        self.chat_display.configure(state="normal")
+        if is_error:
+            self.chat_display.insert("end", f"[{t_str}] ⚠️ {text}\n")
+        else:
+            self.chat_display.insert("end", f"[{t_str}] {sender}: {text}\n")
+        self.chat_display.see("end")
+        self.chat_display.configure(state="disabled")
+
+    def _send_message(self):
+        text = self.msg_entry.get().strip()
+        if not text:
+            return
+        self.msg_entry.delete(0, "end")
+        self.append_message(self.current_username, text)
+
+        def _do_send():
+            ok, err = self.friend_manager.send_direct_message(self.friend_name, text)
+            if not ok:
+                self.after(0, lambda: self.append_message("System", f"Delivery failed: {err}", is_error=True))
+
+        threading.Thread(target=_do_send, daemon=True).start()
+
+    def _on_window_close(self):
+        if self.on_close:
+            try:
+                self.on_close(self.friend_name)
+            except Exception:
+                pass
+        self.destroy()
+
 class LoungeFrame(ctk.CTkFrame):
     """Primary application dashboard for Warcraft III Lounge (GameRanger Experience)."""
 
@@ -48,17 +170,19 @@ class LoungeFrame(ctk.CTkFrame):
         self.player_rows: dict = {}
         self.current_room_title: str = "Warcraft III Lounge"
         self._is_polling_rooms = True
+        self._active_pm_dialogs: dict = {}
 
         self._build_ui()
         self._refresh_game_path_ui()
         self._refresh_friends_list()
 
-        # Start signaling listener for friend requests, direct invites, and presence
+        # Start signaling listener for friend requests, direct invites, presence, and PMs
         self.friend_manager.start_listening(
             on_invite=self._handle_incoming_invite,
             on_friend_request=self._handle_incoming_friend_request,
             on_friend_accepted=self._handle_friend_accepted,
-            on_presence_changed=lambda: self.after(0, self._refresh_friends_list)
+            on_presence_changed=lambda: self.after(0, self._refresh_friends_list),
+            on_direct_message=self._handle_incoming_direct_message
         )
 
         # Start live lobby browser polling
@@ -924,13 +1048,23 @@ class LoungeFrame(ctk.CTkFrame):
                 )
             invite_btn.pack(side="right", padx=6, pady=5)
 
-            # Right-click context menu on row & label to remove friend (no X button clutter)
+            # Right-click context menu on row & label for Private Message and Remove Friend
             def show_friend_menu(event, f=friend, b=invite_btn):
                 menu = tk.Menu(self, tearoff=0)
+                menu.add_command(
+                    label=f"💬 Private Message '{f}'",
+                    command=lambda: self._open_private_chat(f)
+                )
                 if self._is_friend_online_or_hosting(f):
-                    menu.add_command(label=f"🎮 Invite '{f}'", command=lambda: self._handle_invite_friend(f, b))
-                    menu.add_separator()
-                menu.add_command(label=f"❌ Remove Friend '{f}'", command=lambda: self._handle_remove_friend(f))
+                    menu.add_command(
+                        label=f"🎮 Invite '{f}'",
+                        command=lambda: self._handle_invite_friend(f, b)
+                    )
+                menu.add_separator()
+                menu.add_command(
+                    label=f"❌ Remove Friend '{f}'",
+                    command=lambda: self._handle_remove_friend(f)
+                )
                 try:
                     menu.tk_popup(event.x_root, event.y_root)
                 finally:
@@ -939,6 +1073,38 @@ class LoungeFrame(ctk.CTkFrame):
             row.bind("<Button-3>", lambda e, f=friend, b=invite_btn: show_friend_menu(e, f, b))
             name_lbl.bind("<Button-3>", lambda e, f=friend, b=invite_btn: show_friend_menu(e, f, b))
             status_lbl.bind("<Button-3>", lambda e, f=friend, b=invite_btn: show_friend_menu(e, f, b))
+
+    def _open_private_chat(self, friend_name: str) -> PrivateChatDialog:
+        """Opens or brings to front an ephemeral in-memory direct message dialog."""
+        key = friend_name.lower().strip()
+        dialog = self._active_pm_dialogs.get(key)
+        if dialog and dialog.winfo_exists():
+            dialog.lift()
+            dialog.focus_force()
+            return dialog
+
+        dialog = PrivateChatDialog(
+            master=self,
+            current_username=self.current_user.username,
+            friend_name=friend_name,
+            friend_manager=self.friend_manager,
+            on_close=self._on_private_chat_closed
+        )
+        self._active_pm_dialogs[key] = dialog
+        dialog.lift()
+        dialog.focus_force()
+        return dialog
+
+    def _on_private_chat_closed(self, friend_name: str):
+        key = friend_name.lower().strip()
+        self._active_pm_dialogs.pop(key, None)
+
+    def _handle_incoming_direct_message(self, sender: str, text: str):
+        def show():
+            play_chat_sound()
+            dialog = self._open_private_chat(sender)
+            dialog.append_message(sender, text)
+        self.after(0, show)
 
     def _handle_add_friend(self):
         target = self.friend_entry.get().strip()
@@ -953,8 +1119,10 @@ class LoungeFrame(ctk.CTkFrame):
             self.friend_entry.configure(placeholder_text=msg[:25])
 
     def _handle_remove_friend(self, friend: str):
-        from tkinter import messagebox
-        if messagebox.askyesno("Remove Friend", f"Remove '{friend}' from your friends list?"):
+        if messagebox.askyesno(
+            "Remove Friend",
+            f"Are you sure you want to remove '{friend}' from your friends list?"
+        ):
             if self.friend_manager.remove_friend(friend):
                 self._refresh_friends_list()
 
@@ -1078,6 +1246,12 @@ class LoungeFrame(ctk.CTkFrame):
         self._is_polling_rooms = False
         self.lobby_service.stop_hosting_room()
         self.friend_manager.stop_listening()
+        for dialog in list(self._active_pm_dialogs.values()):
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+        self._active_pm_dialogs.clear()
         if self.session:
             self.session.shutdown()
             self.session = None

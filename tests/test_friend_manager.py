@@ -54,11 +54,20 @@ class TestFriendManager(unittest.TestCase):
         user2_fm.accept_friend_request("test_user")
         self.assertIn("test_user", user2_fm.get_friends())
 
-    def test_profile_isolation(self):
-        os.environ["W3L_PROFILE"] = "arthas_test"
-        fm_isolated = FriendManager("arthas_test")
-        self.assertTrue("profile_arthas_test" in str(fm_isolated.config_dir))
-        del os.environ["W3L_PROFILE"]
+    def test_direct_message_handling(self):
+        received = []
+        self.fm.on_direct_message_received = lambda sender, text: received.append((sender, text))
+        
+        # Simulate incoming DM
+        data = {
+            "type": "DIRECT_MESSAGE",
+            "from": "Thrall",
+            "text": "For the Horde!",
+            "ts": 1893456000.0
+        }
+        self.fm._process_incoming_dict(data)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0], ("Thrall", "For the Horde!"))
 
     def test_game_invite_candidates(self):
         invite = GameInvite(

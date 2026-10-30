@@ -282,6 +282,9 @@ class AuthManager:
                 meta = user_obj.get("user_metadata", {})
                 resolved_username = meta.get("display_name") or meta.get("username") or username
 
+                if token and (not meta.get("display_name")):
+                    self._sync_user_metadata(token, resolved_username)
+
                 self.current_user = UserSession(
                     username=resolved_username,
                     user_id=user_id,
@@ -306,6 +309,31 @@ class AuthManager:
             if "11001" in err_str or "getaddrinfo failed" in err_str:
                 return False, "Cannot reach login server. Check your internet connection or restore your Supabase project."
             return False, f"Network error during login: {e}"
+
+    def _sync_user_metadata(self, token: str, username: str):
+        """Asynchronously updates user metadata so Display name is populated in Supabase dashboard."""
+        def _do_update():
+            try:
+                url = f"{self.supabase_url}/auth/v1/user"
+                payload = json.dumps({
+                    "data": {
+                        "username": username,
+                        "display_name": username,
+                        "name": username,
+                        "full_name": username
+                    }
+                }).encode("utf-8")
+                headers = {
+                    "Content-Type": "application/json",
+                    "apikey": self.supabase_key,
+                    "Authorization": f"Bearer {token}"
+                }
+                req = urllib.request.Request(url, data=payload, headers=headers, method="PUT")
+                urllib.request.urlopen(req, timeout=5.0)
+                logger.info(f"Synchronized Supabase display name metadata for '{username}'")
+            except Exception as e:
+                logger.debug(f"Metadata sync skipped: {e}")
+        threading.Thread(target=_do_update, daemon=True).start()
 
     def refresh_session(self) -> bool:
         """Refreshes the Supabase access token using the stored refresh_token."""

@@ -58,6 +58,7 @@ class FriendManager:
         self.on_friend_request_received: Optional[Callable[[str], None]] = None
         self.on_friend_accepted: Optional[Callable[[str], None]] = None
         self.on_presence_changed: Optional[Callable[[], None]] = None
+        self.on_direct_message_received: Optional[Callable[[str, str], None]] = None
 
     def _ensure_config_dir(self) -> None:
         try:
@@ -264,6 +265,44 @@ class FriendManager:
             logger.error(f"Failed to send invite: {e}")
             return False, f"Network error sending invite: {e}"
 
+    def send_direct_message(self, recipient_username: str, text: str) -> Tuple[bool, str]:
+        """
+        Sends an ephemeral direct message to recipient_username over HTTPS signaling.
+        Strictly ephemeral: never persisted to disk or remote database.
+        """
+        recipient_username = recipient_username.strip()
+        text = text.strip()
+        if not recipient_username or not text:
+            return False, "Cannot send empty message."
+
+        topic = self._get_user_topic(recipient_username)
+        url = f"https://ntfy.sh/{topic}"
+
+        payload = json.dumps({
+            "from": self.username,
+            "to": recipient_username,
+            "type": "DIRECT_MESSAGE",
+            "text": text,
+            "ts": time.time()
+        }).encode("utf-8")
+
+        headers = {
+            "Title": f"Private Message from {self.username}",
+            "Priority": "high",
+            "Tags": "speech_balloon"
+        }
+
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                if resp.status == 200:
+                    logger.info(f"Dispatched PM from '{self.username}' to '{recipient_username}'")
+                    return True, "Delivered"
+                return False, f"Delivery failed (Status: {resp.status})"
+        except Exception as e:
+            logger.error(f"Failed to send direct message to {recipient_username}: {e}")
+            return False, f"Failed to deliver: {e}"
+
     def is_friend_online(self, friend_name: str) -> bool:
         """Returns True if friend was seen active within the last 180 seconds."""
         last_seen = self.online_friends.get(friend_name.lower().strip(), 0.0)
@@ -308,9 +347,10 @@ class FriendManager:
         on_invite: Optional[Callable[[GameInvite], None]] = None,
         on_friend_request: Optional[Callable[[str], None]] = None,
         on_friend_accepted: Optional[Callable[[str], None]] = None,
-        on_presence_changed: Optional[Callable[[], None]] = None
+        on_presence_changed: Optional[Callable[[], None]] = None,
+        on_direct_message: Optional[Callable[[str, str], None]] = None
     ) -> None:
-        """Starts real-time listener for incoming game invites, friend requests, and presence."""
+        """Starts real-time listener for incoming game invites, friend requests, presence, and direct messages."""
         if on_invite:
             self.on_invite_received = on_invite
         if on_friend_request:
@@ -319,6 +359,8 @@ class FriendManager:
             self.on_friend_accepted = on_friend_accepted
         if on_presence_changed:
             self.on_presence_changed = on_presence_changed
+        if on_direct_message:
+            self.on_direct_message_received = on_direct_message
 
         if self._running:
             return
@@ -454,3 +496,12 @@ class FriendManager:
                     self.on_presence_changed()
                 except Exception:
                     pass
+
+        elif sig_type == "DIRECT_MESSAGE":
+            # Ephemeral PMs drop if older than 180 seconds
+            if now - ts > 180.0:
+                return
+            msg_text = str(data.get("text", "")).strip()
+            if msg_text and self.on_direct_message_received:
+                logger.info(f"Received Direct Message from '{sender}'")
+                self.on_direct_message_received(sender, msg_text)
