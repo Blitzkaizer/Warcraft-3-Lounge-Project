@@ -603,6 +603,7 @@ class LoungeFrame(ctk.CTkFrame):
         self.main_split.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         self.main_split.columnconfigure(0, weight=0, minsize=220)  # Left Friends panel
         self.main_split.columnconfigure(1, weight=1)              # Right container
+        self.main_split.rowconfigure(0, weight=1)                 # Full vertical expansion to bottom
 
         # Build Left Friends Panel
         self._build_friends_panel()
@@ -822,6 +823,7 @@ class LoungeFrame(ctk.CTkFrame):
         self.room_split.pack(fill="both", expand=True, pady=(0, 6))
         self.room_split.columnconfigure(0, weight=6, minsize=320)  # Left: Chat
         self.room_split.columnconfigure(1, weight=5, minsize=280)  # Right: Player Table
+        self.room_split.rowconfigure(0, weight=1)                 # Full vertical expansion to bottom
 
         # ----------------- LEFT: Live Room Chat Panel (Garena Console) -----------------
         chat_panel = ctk.CTkFrame(self.room_split, fg_color="#0c1017", corner_radius=6)
