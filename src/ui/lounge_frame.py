@@ -326,6 +326,8 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.active_invite: Optional[GameInvite] = None
         self.player_rows: dict = {}
+        self.player_readiness: dict = {}
+        self.is_self_ready: bool = False
         self.current_room_title: str = "Warcraft III Lounge"
         self._is_polling_rooms = True
         self._active_pm_dialogs: dict = {}
@@ -936,7 +938,7 @@ class LoungeFrame(ctk.CTkFrame):
         ctk.CTkLabel(tbl_hdr, text="Lvl", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=28).pack(side="left", padx=2)
         ctk.CTkLabel(tbl_hdr, text="Username", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", anchor="w").pack(side="left", fill="x", expand=True, padx=4)
         ctk.CTkLabel(tbl_hdr, text="Ping", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=58).pack(side="left", padx=2)
-        ctk.CTkLabel(tbl_hdr, text="Rank", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=48).pack(side="right", padx=6)
+        ctk.CTkLabel(tbl_hdr, text="Status", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=80).pack(side="right", padx=6)
 
         self.players_scroll = ctk.CTkScrollableFrame(players_panel, fg_color="transparent")
         self.players_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 6))
@@ -949,19 +951,35 @@ class LoungeFrame(ctk.CTkFrame):
         # Host Console Status Label
         self.host_status_label = ctk.CTkLabel(
             self.room_actions,
-            text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
+            text="⚔️ Host Console: Waiting for players to check Ready",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#bdc3c7"
         )
         self.host_status_label.pack(side="left", padx=16)
 
-        # Client Waiting Status Badge
+        # Client Action Box (Ready Checkbox + Waiting Label)
+        self.client_action_box = ctk.CTkFrame(self.room_actions, fg_color="transparent")
+
+        self.ready_checkbox = ctk.CTkCheckBox(
+            self.client_action_box,
+            text=" Ready to Play",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#2ecc71",
+            fg_color="#27ae60",
+            hover_color="#2ecc71",
+            border_color="#2ecc71",
+            border_width=2,
+            command=self._handle_ready_toggle
+        )
+        self.ready_checkbox.pack(side="left", padx=(6, 12))
+
         self.client_waiting_badge = ctk.CTkLabel(
-            self.room_actions,
+            self.client_action_box,
             text="⏳ Waiting for Host to Launch Game... (Warcraft III will launch automatically)",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#f1c40f"
         )
+        self.client_waiting_badge.pack(side="left")
 
         # Pixel-Perfect Blue Garena START Button
         self.start_game_btn = ctk.CTkButton(
@@ -977,6 +995,9 @@ class LoungeFrame(ctk.CTkFrame):
             command=self._handle_start_game
         )
         self.start_game_btn.pack(side="right", padx=12, pady=3)
+
+        # Right-click Permissive Force Start for Host
+        self.start_game_btn.bind("<Button-3>", self._handle_force_start_game)
 
         def _on_btn_enter(e):
             if self.start_game_btn.cget("state") == "normal" and getattr(self, "start_btn_hover_img", None):
@@ -1131,6 +1152,9 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.on_peer_reconnecting = self._on_peer_reconnecting_callback
         self.session.on_chat_received = self._on_chat_received_callback
         self.session.on_game_launched = self._on_game_launched_callback
+        self.session.on_player_ready_changed = self._on_player_ready_changed_callback
+        self.session.on_player_kicked = self._on_player_kicked_callback
+        self.session.on_kicked_by_host = self._on_kicked_by_host_callback
 
         code = self.session.start_host()
 
@@ -1172,15 +1196,13 @@ class LoungeFrame(ctk.CTkFrame):
                 self.start_game_btn.pack(side="right", padx=12, pady=3)
                 if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
                     self.host_status_label.pack(side="left", padx=16)
-                    self.host_status_label.configure(
-                        text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
-                        text_color="#bdc3c7"
-                    )
-                self.client_waiting_badge.pack_forget()
+                if hasattr(self, "client_action_box") and self.client_action_box.winfo_exists():
+                    self.client_action_box.pack_forget()
 
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
                 self._append_chat("System", f"Room '{title}' created! Waiting for players to join.")
+                self._update_start_button_state()
 
         self.after(0, update)
 
@@ -1280,6 +1302,9 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.on_peer_reconnecting = self._on_peer_reconnecting_callback
         self.session.on_chat_received = self._on_chat_received_callback
         self.session.on_game_launched = self._on_game_launched_callback
+        self.session.on_player_ready_changed = self._on_player_ready_changed_callback
+        self.session.on_player_kicked = self._on_player_kicked_callback
+        self.session.on_kicked_by_host = self._on_kicked_by_host_callback
 
         def _send_punch_syn(h_user, c_ip, c_port, c_lan, c_lport):
             self.friend_manager.send_nat_traversal_syn(h_user, c_ip, c_port, c_lan, c_lport)
@@ -1309,11 +1334,15 @@ class LoungeFrame(ctk.CTkFrame):
                 self.start_game_btn.pack_forget()
                 if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
                     self.host_status_label.pack_forget()
-                self.client_waiting_badge.pack(side="left", padx=16)
+                if hasattr(self, "client_action_box") and self.client_action_box.winfo_exists():
+                    self.client_action_box.pack(side="left", padx=16)
+                if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
+                    self.ready_checkbox.deselect()
+                self.is_self_ready = False
 
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
-                self._append_chat("System", f"Joined room '{self.current_room_title}'! Ready to play.")
+                self._append_chat("System", f"Joined room '{self.current_room_title}'! Check 'Ready to Play' when set.")
             else:
                 from ..core.tcp_tunnel import ClientTCPBridge
                 if ClientTCPBridge.is_port_in_use(WC3_DEFAULT_PORT):
@@ -1342,6 +1371,11 @@ class LoungeFrame(ctk.CTkFrame):
             self.session.shutdown()
             self.session = None
 
+        self.player_readiness.clear()
+        self.is_self_ready = False
+        if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
+            self.ready_checkbox.deselect()
+
         if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
             self.start_game_btn.configure(
                 state="normal",
@@ -1349,7 +1383,7 @@ class LoungeFrame(ctk.CTkFrame):
             )
         if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
             self.host_status_label.configure(
-                text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
+                text="⚔️ Host Console: Waiting for players to check Ready",
                 text_color="#bdc3c7"
             )
 
@@ -1364,6 +1398,157 @@ class LoungeFrame(ctk.CTkFrame):
         self.active_room_frame.pack_forget()
         self.lobby_selection_frame.pack(fill="both", expand=True)
         self._refresh_rooms_list()
+
+    def _handle_ready_toggle(self):
+        """Client toggles 'Ready to Play' checkbox."""
+        self.is_self_ready = bool(self.ready_checkbox.get())
+        self.player_readiness[self.current_user.username] = self.is_self_ready
+        if self.session:
+            self.session.set_ready(self.is_self_ready)
+
+        status_txt = "READY!" if self.is_self_ready else "NOT READY."
+        self._append_chat("System", f"You are now {status_txt}")
+        # Update self status in player roster
+        if self.current_user.username in self.player_rows:
+            entry = self.player_rows[self.current_user.username]
+            color = "#2ecc71" if self.is_self_ready else "#95a5a6"
+            txt = "🟢 READY" if self.is_self_ready else "⚪ NOT READY"
+            entry["rank"].configure(text=txt, text_color=color)
+
+    def _on_player_ready_changed_callback(self, username: str, is_ready: bool):
+        """Called when a player toggles ready."""
+        def update():
+            self.player_readiness[username] = is_ready
+            status_txt = "READY!" if is_ready else "NOT READY."
+            self._append_chat("System", f"Player '{username}' is {status_txt}")
+            # Update row in roster
+            target_key = None
+            for key in self.player_rows.keys():
+                if key.lower().strip() == username.lower().strip():
+                    target_key = key
+                    break
+            if target_key and target_key in self.player_rows:
+                entry = self.player_rows[target_key]
+                color = "#2ecc71" if is_ready else "#95a5a6"
+                txt = "🟢 READY" if is_ready else "⚪ NOT READY"
+                entry["rank"].configure(text=txt, text_color=color)
+
+            self._update_start_button_state()
+        self.after(0, update)
+
+    def _update_start_button_state(self):
+        """Updates host START button state and status message based on peer readiness."""
+        if not self.session or not self.session.is_host:
+            return
+
+        non_host_players = [
+            u for u in self.player_rows.keys()
+            if u.lower().strip() != self.current_user.username.lower().strip()
+        ]
+
+        if not non_host_players:
+            # Host alone: allowed to start solo
+            all_ready = True
+            ready_count = 0
+            total_count = 0
+        else:
+            total_count = len(non_host_players)
+            ready_count = sum(1 for u in non_host_players if self.player_readiness.get(u, False))
+            all_ready = (ready_count == total_count)
+
+        if all_ready:
+            self.start_game_btn.configure(
+                state="normal",
+                image=self.start_btn_img
+            )
+            if not non_host_players:
+                self.host_status_label.configure(
+                    text="⚔️ Host Console: Solo testing / Ready to launch Warcraft III",
+                    text_color="#bdc3c7"
+                )
+            else:
+                self.host_status_label.configure(
+                    text=f"✅ All players READY ({ready_count}/{total_count})! Click START to launch",
+                    text_color="#2ecc71"
+                )
+        else:
+            self.start_game_btn.configure(
+                state="disabled",
+                image=getattr(self, "start_btn_dis_img", self.start_btn_img)
+            )
+            self.host_status_label.configure(
+                text=f"⚠️ Waiting for players to be Ready ({ready_count}/{total_count}) • Right-click START to force launch",
+                text_color="#f39c12"
+            )
+
+    def _handle_force_start_game(self, event=None):
+        """Host right-clicks START button for permissive force launch."""
+        if not self.session or not self.session.is_host:
+            return
+
+        non_host_players = [
+            u for u in self.player_rows.keys()
+            if u.lower().strip() != self.current_user.username.lower().strip()
+        ]
+        unready_players = [u for u in non_host_players if not self.player_readiness.get(u, False)]
+        if not unready_players:
+            # All ready anyway
+            self._handle_start_game()
+            return
+
+        unready_names = ", ".join(f"'{u}'" for u in unready_players)
+        msg = f"The following players have not checked Ready:\n{unready_names}\n\nDo you want to Force Launch Warcraft III for all players anyway?"
+        if messagebox.askyesno("Force Launch Game", msg):
+            self._append_chat("System", "Host force-launched the game without all players ready!")
+            self._handle_start_game()
+
+    def _kick_player(self, username: str):
+        """Host kicks a player from the room."""
+        if not self.session or not self.session.is_host:
+            return
+        if messagebox.askyesno("Kick Player", f"Are you sure you want to kick '{username}' from the room?"):
+            logger.info(f"Host kicking player '{username}'...")
+            self.session.kick_player(username)
+            self._append_chat("System", f"Player '{username}' was kicked by the host.")
+            # Remove from roster
+            target_key = None
+            for p in list(self.player_rows.keys()):
+                if p.lower().strip() == username.lower().strip():
+                    target_key = p
+                    break
+            if target_key:
+                p_data = self.player_rows.pop(target_key)
+                if isinstance(p_data, dict):
+                    p_data["row"].destroy()
+                self._update_players_count_display()
+            self.player_readiness.pop(username, None)
+            self._update_start_button_state()
+
+    def _on_kicked_by_host_callback(self):
+        """Called when local client is kicked by the host."""
+        def update():
+            logger.warning("Local client was kicked from room by host.")
+            self._leave_lounge()
+            messagebox.showwarning("Kicked from Room", "You were kicked from the room by the host.")
+        self.after(0, update)
+
+    def _on_player_kicked_callback(self, username: str):
+        """Called when another player is kicked by the host."""
+        def update():
+            self._append_chat("System", f"Player '{username}' was kicked by the host.")
+            target_key = None
+            for p in list(self.player_rows.keys()):
+                if p.lower().strip() == username.lower().strip():
+                    target_key = p
+                    break
+            if target_key:
+                p_data = self.player_rows.pop(target_key)
+                if isinstance(p_data, dict):
+                    p_data["row"].destroy()
+                self._update_players_count_display()
+            self.player_readiness.pop(username, None)
+            self._update_start_button_state()
+        self.after(0, update)
 
     def _add_player_card(self, username: str, is_self: bool = False, is_host: bool = False, initial_text: Optional[str] = None):
         target_key = None
@@ -1423,15 +1608,21 @@ class LoungeFrame(ctk.CTkFrame):
         )
         ping_lbl.pack(side="left", padx=2, pady=3)
 
-        # 5. Rank
-        rank_text = "Host" if is_host else "Player"
-        rank_color = "#e67e22" if is_host else "#7f8c8d"
+        # 5. Status / Readiness (Host or Ready/Not Ready)
+        if is_host:
+            status_text = "👑 Host"
+            status_color = "#f39c12"
+        else:
+            ready_state = self.player_readiness.get(username, False)
+            status_text = "🟢 READY" if ready_state else "⚪ NOT READY"
+            status_color = "#2ecc71" if ready_state else "#95a5a6"
+
         rank_lbl = ctk.CTkLabel(
             row,
-            text=rank_text,
-            width=48,
+            text=status_text,
+            width=80,
             font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color=rank_color
+            text_color=status_color
         )
         rank_lbl.pack(side="right", padx=6, pady=3)
 
@@ -1443,6 +1634,22 @@ class LoungeFrame(ctk.CTkFrame):
             "name": name_lbl,
             "rank": rank_lbl
         }
+
+        # Right-click kick menu for Host to Kick non-host players
+        if not is_self:
+            def _show_kick_menu(event, u=username):
+                if not (self.session and self.session.is_host):
+                    return
+                menu = tk.Menu(self, tearoff=0, bg="#1a232f", fg="#ecf0f1", activebackground="#c0392b", activeforeground="#ffffff")
+                menu.add_command(label=f"🥾 Kick '{u}' from Room", command=lambda: self._kick_player(u))
+                try:
+                    menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    menu.grab_release()
+
+            for w in (row, name_lbl, sta_lbl, lvl_lbl, ping_lbl, rank_lbl):
+                w.bind("<Button-3>", _show_kick_menu)
+
         self._update_players_count_display()
 
     def _reset_player_cards(self, is_host: bool):
@@ -1487,13 +1694,18 @@ class LoungeFrame(ctk.CTkFrame):
             play_join_sound()
             self._add_player_card(username, is_self=False, is_host=False, initial_text="Connected")
             self._append_chat("System", f"Player '{username}' joined the room!")
+            self.player_readiness[username] = False
+            self._update_start_button_state()
+            # If local player is a client and already ready, sync readiness to the peer
+            if self.session and not self.session.is_host and self.is_self_ready:
+                self.session.set_ready(True)
         self.after(0, update)
 
     def _on_peer_left_callback(self, username: str):
         def update():
             play_leave_sound()
             target_key = None
-            for p in self.player_rows.keys():
+            for p in list(self.player_rows.keys()):
                 if p.lower().strip() == username.lower().strip():
                     target_key = p
                     break
@@ -1503,8 +1715,10 @@ class LoungeFrame(ctk.CTkFrame):
                     p_data["row"].destroy()
                 elif isinstance(p_data, tuple):
                     p_data[0].destroy()
+                self.player_readiness.pop(username, None)
                 self._update_players_count_display()
                 self._append_chat("System", f"Player '{username}' left the room.")
+                self._update_start_button_state()
         self.after(0, update)
 
     def _on_match_detected_callback(self, match_name, open_slots, total_slots):

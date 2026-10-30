@@ -49,6 +49,9 @@ class LoungeSession:
         self.on_peer_left: Optional[Callable[[str], None]] = None
         self.on_chat_received: Optional[Callable[[str, str], None]] = None
         self.on_peer_reconnecting: Optional[Callable[[str], None]] = None
+        self.on_player_ready_changed: Optional[Callable[[str, bool], None]] = None
+        self.on_player_kicked: Optional[Callable[[str], None]] = None
+        self.on_kicked_by_host: Optional[Callable[[], None]] = None
 
     def start_host(self) -> Optional[str]:
         """
@@ -307,6 +310,51 @@ class LoungeSession:
         if event_text == "CMD:LAUNCH":
             logger.info("Host initiated game launch! Auto-launching local Warcraft III...")
             self.launch_game()
+        elif event_text.startswith("CMD:READY:"):
+            # Format: CMD:READY:<0|1>:<username>
+            parts = event_text.split(":")
+            if len(parts) >= 4:
+                is_ready = (parts[2] == "1")
+                username = parts[3]
+                if self.on_player_ready_changed:
+                    self.on_player_ready_changed(username, is_ready)
+        elif event_text.startswith("CMD:KICK:"):
+            # Format: CMD:KICK:<username>
+            parts = event_text.split(":")
+            if len(parts) >= 3:
+                target_user = parts[2]
+                if target_user.lower().strip() == self.player_name.lower().strip():
+                    logger.warning("Local player has been kicked from the room by the host.")
+                    if self.on_kicked_by_host:
+                        self.on_kicked_by_host()
+                else:
+                    if self.on_player_kicked:
+                        self.on_player_kicked(target_user)
+
+    def set_ready(self, is_ready: bool):
+        """Broadcasts local player ready status to all room participants."""
+        if self.puncher:
+            val = "1" if is_ready else "0"
+            self.puncher.send_event_to_peers(f"CMD:READY:{val}:{self.player_name}")
+
+    def kick_player(self, username: str):
+        """Host kicks a player from the room."""
+        if not self.is_host or not self.puncher:
+            return
+        logger.info(f"Host kicking player '{username}' from room.")
+        self.puncher.send_event_to_peers(f"CMD:KICK:{username}")
+        # Disconnect peer locally
+        target_peer = None
+        for peer, name in list(self.connected_peers.items()):
+            if name.lower().strip() == username.lower().strip():
+                target_peer = peer
+                break
+        if target_peer:
+            self.connected_peers.pop(target_peer, None)
+            if hasattr(self.puncher, "connected_peers") and target_peer in self.puncher.connected_peers:
+                self.puncher.connected_peers.pop(target_peer, None)
+            if hasattr(self.puncher, "peer_names") and target_peer in self.puncher.peer_names:
+                self.puncher.peer_names.pop(target_peer, None)
 
     def _handle_chat_message(self, sender: str, message: str):
         logger.info(f"[Room Chat] {sender}: {message}")
