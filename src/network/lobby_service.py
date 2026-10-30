@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional
 import urllib.error
 import urllib.request
 
-from ..core.config import APP_VERSION, logger
+from ..core.config import APP_VERSION, SIGNALING_SERVERS, logger
 
 GLOBAL_LOBBY_TOPIC = "w3l_global_lobby_v1"
 
@@ -91,16 +91,22 @@ class LobbyService:
                     "room_id": self._current_hosted_room.room_id,
                     "host": self.username
                 }).encode("utf-8")
-                url = f"https://ntfy.sh/{GLOBAL_LOBBY_TOPIC}"
-                req = urllib.request.Request(url, data=payload, method="POST")
-                urllib.request.urlopen(req, timeout=3.0)
+                headers = {"Title": "Room Closed", "User-Agent": "W3Lounge/1.0"}
+                for srv in SIGNALING_SERVERS[:2]:
+                    try:
+                        url = f"{srv}/{GLOBAL_LOBBY_TOPIC}"
+                        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+                        with urllib.request.urlopen(req, timeout=3.0) as resp:
+                            if resp.status == 200:
+                                break
+                    except Exception:
+                        pass
             except Exception:
                 pass
             self._current_hosted_room = None
 
     def _broadcast_room(self, room: LobbyRoom):
         try:
-            url = f"https://ntfy.sh/{GLOBAL_LOBBY_TOPIC}"
             payload = json.dumps({
                 "type": "ROOM_ANNOUNCE",
                 "room_id": room.room_id,
@@ -114,61 +120,71 @@ class LobbyService:
                 "password_hash": room.password_hash,
                 "ts": time.time()
             }).encode("utf-8")
-            req = urllib.request.Request(url, data=payload, method="POST")
-            urllib.request.urlopen(req, timeout=4.0)
+            headers = {"Title": "Room Announce", "User-Agent": "W3Lounge/1.0"}
+            for srv in SIGNALING_SERVERS:
+                try:
+                    url = f"{srv}/{GLOBAL_LOBBY_TOPIC}"
+                    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+                    with urllib.request.urlopen(req, timeout=4.0) as resp:
+                        if resp.status == 200:
+                            break
+                except Exception:
+                    continue
         except Exception as e:
             logger.debug(f"Lobby announcement error: {e}")
 
     def _announce_loop(self):
         while self._is_announcing and self._current_hosted_room:
             self._broadcast_room(self._current_hosted_room)
-            time.sleep(6.0)
+            time.sleep(20.0)
 
     def fetch_public_rooms(self) -> List[LobbyRoom]:
         """Polls active rooms announced on the global lobby topic."""
-        try:
-            url = f"https://ntfy.sh/{GLOBAL_LOBBY_TOPIC}/json?poll=1&since=30s"
-            req = urllib.request.Request(url, headers={"User-Agent": "W3Lounge/1.0"})
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                now = time.time()
-                for line in resp:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if not line_str:
-                        continue
-                    try:
-                        record = json.loads(line_str)
-                        if record.get("event") == "message" and record.get("message"):
-                            msg = json.loads(record["message"])
-                            msg_type = msg.get("type")
-                            r_id = msg.get("room_id")
-                            if msg_type == "ROOM_CLOSED":
-                                self.active_rooms.pop(r_id, None)
-                            elif msg_type == "ROOM_ANNOUNCE" and r_id:
-                                ts = msg.get("ts", 0.0)
-                                if now - ts < 45.0:  # Fresh room
-                                    self.active_rooms[r_id] = LobbyRoom(
-                                        room_id=r_id,
-                                        title=msg.get("title", "Warcraft III Game"),
-                                        host_username=msg.get("host", "Host"),
-                                        lounge_code=msg.get("code", ""),
-                                        max_players=msg.get("max_players", 10),
-                                        current_players=msg.get("current_players", 1),
-                                        local_port=0,
-                                        local_ip="",
-                                        last_seen=ts,
-                                        app_version=msg.get("version", "1.0.0"),
-                                        is_locked=bool(msg.get("is_locked", False)),
-                                        password_hash=str(msg.get("password_hash", ""))
-                                    )
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"Failed to fetch public rooms: {e}")
+        for srv in SIGNALING_SERVERS[:2]:
+            try:
+                url = f"{srv}/{GLOBAL_LOBBY_TOPIC}/json?poll=1&since=60s"
+                req = urllib.request.Request(url, headers={"User-Agent": "W3Lounge/1.0"})
+                with urllib.request.urlopen(req, timeout=5.0) as resp:
+                    now = time.time()
+                    for line in resp:
+                        line_str = line.decode("utf-8", errors="ignore").strip()
+                        if not line_str:
+                            continue
+                        try:
+                            record = json.loads(line_str)
+                            if record.get("event") == "message" and record.get("message"):
+                                msg = json.loads(record["message"])
+                                msg_type = msg.get("type")
+                                r_id = msg.get("room_id")
+                                if msg_type == "ROOM_CLOSED":
+                                    self.active_rooms.pop(r_id, None)
+                                elif msg_type == "ROOM_ANNOUNCE" and r_id:
+                                    ts = msg.get("ts", 0.0)
+                                    if now - ts < 60.0:  # Fresh room
+                                        self.active_rooms[r_id] = LobbyRoom(
+                                            room_id=r_id,
+                                            title=msg.get("title", "Warcraft III Game"),
+                                            host_username=msg.get("host", "Host"),
+                                            lounge_code=msg.get("code", ""),
+                                            max_players=msg.get("max_players", 10),
+                                            current_players=msg.get("current_players", 1),
+                                            local_port=0,
+                                            local_ip="",
+                                            last_seen=ts,
+                                            app_version=msg.get("version", "1.0.0"),
+                                            is_locked=bool(msg.get("is_locked", False)),
+                                            password_hash=str(msg.get("password_hash", ""))
+                                        )
+                        except Exception:
+                            pass
+                break  # Successfully fetched from primary
+            except Exception as e:
+                logger.debug(f"Failed to fetch public rooms from {srv}: {e}")
 
-        # Clean expired rooms (> 25s without heartbeat)
+        # Clean expired rooms (> 50s without heartbeat)
         now = time.time()
         self.active_rooms = {
             r_id: room for r_id, room in self.active_rooms.items()
-            if (now - room.last_seen < 25.0)
+            if (now - room.last_seen < 50.0)
         }
         return list(self.active_rooms.values())

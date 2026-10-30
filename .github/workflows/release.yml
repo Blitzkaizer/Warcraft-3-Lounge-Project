@@ -32,14 +32,15 @@ jobs:
         run: |
           python -m pytest tests/ -v
 
-      - name: Build Windows Executable (PyInstaller)
+      - name: Build Windows Executables (PyInstaller)
         run: |
           python -m PyInstaller Warcraft3Lounge.spec --noconfirm
+          python -m PyInstaller Warcraft3Lounge_Portable.spec --noconfirm
 
       - name: Package Release Zip
         shell: powershell
         run: |
-          $Tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.0.1" }
+          $Tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.0.2" }
           $ZipName = "Warcraft3Lounge_Setup_${Tag}.zip"
           Compress-Archive -Path "dist\Warcraft3Lounge\*" -DestinationPath "dist\$ZipName" -Force
           Write-Host "Created release package: dist\$ZipName"
@@ -47,7 +48,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Warcraft3Lounge_Setup_*.zip
+          files: |
+            dist/Warcraft3Lounge_Setup_*.zip
+            dist/Warcraft3Lounge_Portable.exe
           generate_release_notes: true
           draft: false
           prerelease: false

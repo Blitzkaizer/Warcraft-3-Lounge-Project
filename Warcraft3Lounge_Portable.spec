@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:/Users/navin/AppData/Local/Programs/Python/Python313/Lib/site-packages/customtkinter', 'customtkinter'), ('assets', 'assets')]
+datas = [('assets', 'assets')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')

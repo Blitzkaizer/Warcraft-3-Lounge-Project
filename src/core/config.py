@@ -10,12 +10,21 @@ from pathlib import Path
 import sys
 from typing import Any, Optional
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 
 # Default Warcraft III Classic ports & settings
 WC3_DEFAULT_PORT = 6112       # Standard WC3 LAN UDP discovery & TCP game hosting port
 DEFAULT_TUNNEL_PORT = 6113    # Default port for P2P internet communication between Lounge peers
 BUFFER_SIZE = 4096            # Standard network packet buffer size
+
+# Redundant High-Speed Public HTTPS Signaling Relays with Automatic Failover
+SIGNALING_SERVERS = [
+    "https://ntfy.envs.net",
+    "https://ntfy.tedomum.fr",
+    "https://ntfy.adminforge.de",
+    "https://ntfy.hostux.net",
+    "https://ntfy.sh"
+]
 
 # Classic Warcraft III Executable & Registry Names
 CLASSIC_WC3_EXECUTABLES = ["war3.exe", "Frozen Throne.exe"]

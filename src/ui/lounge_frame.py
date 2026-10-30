@@ -920,6 +920,19 @@ class LoungeFrame(ctk.CTkFrame):
         )
         self.host_game_btn.pack(side="left")
 
+        # Join by Code Button (Right next to Host Game)
+        self.join_code_btn = ctk.CTkButton(
+            browser_header,
+            text="🔗 Join by Code",
+            width=120,
+            height=32,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            fg_color="#2c3e50",
+            hover_color="#34495e",
+            command=self._open_join_by_code_modal
+        )
+        self.join_code_btn.pack(side="left", padx=(8, 0))
+
         # Refresh button (Right)
         self.refresh_btn = ctk.CTkButton(
             browser_header,
@@ -1020,6 +1033,26 @@ class LoungeFrame(ctk.CTkFrame):
         """Opens full custom modal dialog to configure and host a game."""
         default_title = f"{self.current_user.username}'s Game"
         HostGameModal(self, default_title, on_host=self._start_hosting)
+
+    def _open_join_by_code_modal(self):
+        """Allows direct joining by entering or pasting a W3L- room code."""
+        dialog = ctk.CTkInputDialog(
+            text="Paste the Host's Room Code (starts with W3L-):\n\n(Tip: The Host can copy their code with 1 click inside their room!)",
+            title="🔗 Join Room by Code"
+        )
+        code = dialog.get_input()
+        if not code or not code.strip():
+            return
+        code = code.strip()
+        if not code.startswith("W3L-"):
+            messagebox.showerror("Invalid Code", "Room code must start with 'W3L-'. Please verify the code and try again.")
+            return
+        self.current_room_title = "Private Room"
+        threading.Thread(
+            target=self._async_join,
+            args=(code,),
+            daemon=True
+        ).start()
 
     def _build_active_room_ui(self):
         """Constructs the classic Garena Room Screen with Live Chat on Left & Player Table on Right."""
@@ -1473,6 +1506,15 @@ class LoungeFrame(ctk.CTkFrame):
                     f"Both players must update to v{APP_VERSION} for multiplayer to work properly."
                 )
             self.after(0, warn_ver)
+
+        # Always terminate previous session or hosting before joining to release sockets
+        self.lobby_service.stop_hosting_room()
+        if self.session:
+            try:
+                self.session.shutdown()
+            except Exception:
+                pass
+            self.session = None
 
         from ..core.tcp_tunnel import ClientTCPBridge
         if ClientTCPBridge.is_port_in_use(WC3_DEFAULT_PORT):
@@ -2037,53 +2079,31 @@ class LoungeFrame(ctk.CTkFrame):
             )
             name_lbl.pack(side="left", fill="x", expand=True, padx=(2, 4), pady=4)
 
-            # Invite Button: strictly enabled only if friend is online!
-            if is_online:
-                invite_btn = ctk.CTkButton(
-                    row,
-                    text="Invite",
-                    width=60,
-                    height=24,
-                    font=ctk.CTkFont(size=11, weight="bold"),
-                    fg_color="#27ae60",
-                    hover_color="#219150",
-                    state="normal"
-                )
-                invite_btn.configure(command=lambda f=friend, b=invite_btn: self._handle_invite_friend(f, b))
-            else:
-                invite_btn = ctk.CTkButton(
-                    row,
-                    text="Offline",
-                    width=60,
-                    height=24,
-                    font=ctk.CTkFont(size=10),
-                    fg_color="#1c2833",
-                    text_color="#7f8c8d",
-                    state="disabled"
-                )
+            # Invite Button: always enabled so you can invite friends anytime
+            invite_btn = ctk.CTkButton(
+                row,
+                text="Invite",
+                width=60,
+                height=24,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color="#27ae60" if is_online else "#1e3752",
+                hover_color="#219150" if is_online else "#2c3e50",
+                state="normal"
+            )
+            invite_btn.configure(command=lambda f=friend, b=invite_btn: self._handle_invite_friend(f, b))
             invite_btn.pack(side="right", padx=6, pady=4)
 
             # Right-click context menu on row & label for Private Message and Remove Friend
             def show_friend_menu(event, f=friend, b=invite_btn, online=is_online):
                 menu = tk.Menu(self, tearoff=0)
-                if online:
-                    menu.add_command(
-                        label=f"💬 Private Message '{f}'",
-                        command=lambda: self._open_private_chat(f)
-                    )
-                    menu.add_command(
-                        label=f"🎮 Invite '{f}'",
-                        command=lambda: self._handle_invite_friend(f, b)
-                    )
-                else:
-                    menu.add_command(
-                        label=f"💬 Private Message '{f}' (Offline)",
-                        state="disabled"
-                    )
-                    menu.add_command(
-                        label=f"🎮 Invite '{f}' (Offline)",
-                        state="disabled"
-                    )
+                menu.add_command(
+                    label=f"💬 Private Message '{f}'",
+                    command=lambda: self._open_private_chat(f)
+                )
+                menu.add_command(
+                    label=f"🎮 Invite '{f}'",
+                    command=lambda: self._handle_invite_friend(f, b)
+                )
                 menu.add_separator()
                 menu.add_command(
                     label=f"❌ Remove Friend '{f}'",
@@ -2250,6 +2270,13 @@ class LoungeFrame(ctk.CTkFrame):
         self.invite_banner.pack_forget()
         self.active_invite = None
         self.current_room_title = f"{invite.host_username}'s Game"
+        self.lobby_service.stop_hosting_room()
+        if self.session:
+            try:
+                self.session.shutdown()
+            except Exception:
+                pass
+            self.session = None
         threading.Thread(
             target=self._async_join,
             args=(invite.room_code, invite.local_port, invite.local_ip, invite.host_username, invite.app_version),

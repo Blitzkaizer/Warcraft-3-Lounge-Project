@@ -16,7 +16,7 @@ from typing import Callable, List, Optional, Set, Tuple
 import urllib.error
 import urllib.request
 
-from ..core.config import APP_VERSION, logger
+from ..core.config import APP_VERSION, SIGNALING_SERVERS, logger
 
 # App-level HMAC key for ntfy.sh topic derivation.
 # Makes topics uncomputable without this key (requires binary reverse-engineering).
@@ -73,6 +73,34 @@ class FriendManager:
         msg = f"w3l_signal_{user.lower().strip()}".encode()
         h = hmac.new(_TOPIC_HMAC_KEY, msg, hashlib.sha256).hexdigest()[:24]
         return f"w3l_{h}"
+
+    def _post_signal_to_topic(
+        self,
+        topic: str,
+        payload_bytes: bytes,
+        headers: Optional[dict] = None,
+        timeout: float = 4.0
+    ) -> Tuple[bool, str]:
+        """
+        Posts signaling payload with automatic failover across redundant public relays.
+        Tolerates 429 rate-limits, DNS blocks, and network timeouts.
+        """
+        headers = headers or {}
+        last_err = "No servers attempted"
+        for srv in SIGNALING_SERVERS:
+            url = f"{srv}/{topic}"
+            try:
+                req = urllib.request.Request(url, data=payload_bytes, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        return True, srv
+            except urllib.error.HTTPError as e:
+                last_err = f"{srv} returned {e.code} ({e.reason})"
+                logger.debug(f"Signaling relay {srv} failed with {e.code}, trying next relay...")
+            except Exception as e:
+                last_err = f"{srv} error: {e}"
+                logger.debug(f"Signaling relay {srv} error: {e}, trying next relay...")
+        return False, last_err
 
     def get_friends(self) -> List[str]:
         """Returns list of friends for the current user."""
@@ -135,7 +163,6 @@ class FriendManager:
 
         # Dispatch real-time HTTPS signal to recipient
         topic = self._get_user_topic(target_username)
-        url = f"https://ntfy.sh/{topic}"
 
         payload = json.dumps({
             "from": self.username,
@@ -150,16 +177,11 @@ class FriendManager:
             "Tags": "busts_in_silhouette,waving_hand"
         }
 
-        try:
-            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                if resp.status == 200:
-                    logger.info(f"Dispatched Friend Request from '{self.username}' to '{target_username}'")
-                    return True, f"Friend request sent to {target_username}!"
-                return False, f"Error sending request (Status: {resp.status})"
-        except Exception as e:
-            logger.error(f"Failed to send friend request: {e}")
-            return True, f"Added {target_username} (offline signal queued)."
+        success, srv = self._post_signal_to_topic(topic, payload, headers=headers)
+        if success:
+            logger.info(f"Dispatched Friend Request from '{self.username}' to '{target_username}' via {srv}")
+            return True, f"Friend request sent to {target_username}!"
+        return True, f"Added {target_username} (offline signal queued)."
 
     def accept_friend_request(self, from_username: str) -> None:
         """
@@ -171,7 +193,6 @@ class FriendManager:
         self.add_friend(from_username)
 
         topic = self._get_user_topic(from_username)
-        url = f"https://ntfy.sh/{topic}"
         payload = json.dumps({
             "from": self.username,
             "to": from_username,
@@ -179,17 +200,10 @@ class FriendManager:
             "ts": time.time()
         }).encode("utf-8")
 
-        try:
-            req = urllib.request.Request(url, data=payload, headers={"Priority": "default"}, method="POST")
-            def _post():
-                try:
-                    urllib.request.urlopen(req, timeout=5.0)
-                except Exception:
-                    pass
-            threading.Thread(target=_post, daemon=True).start()
-            logger.info(f"Sent FRIEND_ACCEPT from '{self.username}' to '{from_username}'")
-        except Exception as e:
-            logger.debug(f"Error sending friend accept signal: {e}")
+        def _post():
+            self._post_signal_to_topic(topic, payload, headers={"Priority": "default"}, timeout=4.0)
+        threading.Thread(target=_post, daemon=True).start()
+        logger.info(f"Sent FRIEND_ACCEPT from '{self.username}' to '{from_username}'")
 
     def remove_friend(self, friend_name: str) -> bool:
         """Removes a friend from the list."""
@@ -226,7 +240,7 @@ class FriendManager:
     ) -> Tuple[bool, str]:
         """
         Sends a 1-click game invite directly to the recipient's app.
-        Delivered over encrypted HTTPS signaling in milliseconds.
+        Delivered over encrypted HTTPS signaling in milliseconds with multi-relay failover.
         Includes local LAN / loopback candidates for zero-lag instant connection.
         """
         recipient_username = recipient_username.strip()
@@ -234,7 +248,6 @@ class FriendManager:
             return False, "Invalid recipient username."
 
         topic = self._get_user_topic(recipient_username)
-        url = f"https://ntfy.sh/{topic}"
 
         payload_dict = {
             "from": self.username,
@@ -257,16 +270,12 @@ class FriendManager:
             "Tags": "video_game,swords"
         }
 
-        try:
-            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                if resp.status == 200:
-                    logger.info(f"Dispatched 1-click invite from '{self.username}' to '{recipient_username}'")
-                    return True, f"Invite sent to {recipient_username}!"
-                return False, f"Failed to deliver invite (Status: {resp.status})"
-        except Exception as e:
-            logger.error(f"Failed to send invite: {e}")
-            return False, f"Network error sending invite: {e}"
+        success, srv = self._post_signal_to_topic(topic, payload, headers=headers)
+        if success:
+            logger.info(f"Dispatched 1-click invite from '{self.username}' to '{recipient_username}' via {srv}")
+            return True, f"Invite sent to {recipient_username}!"
+        logger.error(f"Failed to send invite: {srv}")
+        return False, f"Network error sending invite ({srv})"
 
     def send_direct_message(self, recipient_username: str, text: str) -> Tuple[bool, str]:
         """
@@ -283,7 +292,6 @@ class FriendManager:
             return False, f"Cannot send message: '{recipient_username}' is offline."
 
         topic = self._get_user_topic(recipient_username)
-        url = f"https://ntfy.sh/{topic}"
 
         payload = json.dumps({
             "from": self.username,
@@ -299,16 +307,12 @@ class FriendManager:
             "Tags": "speech_balloon"
         }
 
-        try:
-            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                if resp.status == 200:
-                    logger.info(f"Dispatched PM from '{self.username}' to '{recipient_username}'")
-                    return True, "Delivered"
-                return False, f"Delivery failed (Status: {resp.status})"
-        except Exception as e:
-            logger.error(f"Failed to send direct message to {recipient_username}: {e}")
-            return False, f"Failed to deliver: {e}"
+        success, srv = self._post_signal_to_topic(topic, payload, headers=headers)
+        if success:
+            logger.info(f"Dispatched PM from '{self.username}' to '{recipient_username}' via {srv}")
+            return True, "Delivered"
+        logger.error(f"Failed to send direct message to {recipient_username}: {srv}")
+        return False, f"Failed to deliver: {srv}"
 
     def send_nat_traversal_syn(
         self,
@@ -324,7 +328,6 @@ class FriendManager:
             return
 
         topic = self._get_user_topic(host_username)
-        url = f"https://ntfy.sh/{topic}"
 
         payload = json.dumps({
             "from": self.username,
@@ -344,12 +347,11 @@ class FriendManager:
         }
 
         def _do_send():
-            try:
-                req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-                urllib.request.urlopen(req, timeout=4.0)
-                logger.info(f"Dispatched NAT_TRAVERSAL_SYN from '{self.username}' to Host '{host_username}'")
-            except Exception as e:
-                logger.debug(f"Failed to dispatch NAT_TRAVERSAL_SYN: {e}")
+            success, srv = self._post_signal_to_topic(topic, payload, headers=headers, timeout=4.0)
+            if success:
+                logger.info(f"Dispatched NAT_TRAVERSAL_SYN from '{self.username}' to Host '{host_username}' via {srv}")
+            else:
+                logger.debug(f"Failed to dispatch NAT_TRAVERSAL_SYN: {srv}")
 
         threading.Thread(target=_do_send, daemon=True, name="NAT-Syn-Sender").start()
 
@@ -359,7 +361,7 @@ class FriendManager:
         return (time.time() - last_seen) < 180.0
 
     def _broadcast_presence(self, status: str = "ONLINE"):
-        """Sends lightweight presence ping to all mutual friends."""
+        """Sends lightweight presence ping to all mutual friends across signaling relays."""
         friends = self.get_friends()
         if not friends:
             return
@@ -372,12 +374,7 @@ class FriendManager:
 
         for f in friends:
             topic = self._get_user_topic(f)
-            url = f"https://ntfy.sh/{topic}"
-            try:
-                req = urllib.request.Request(url, data=payload, headers={"Priority": "min"}, method="POST")
-                urllib.request.urlopen(req, timeout=3.0)
-            except Exception:
-                pass
+            self._post_signal_to_topic(topic, payload, headers={"Priority": "min"}, timeout=3.0)
 
     def _presence_loop(self):
         # Initial broadcast
@@ -434,35 +431,38 @@ class FriendManager:
 
     def _poll_offline_signals(self, topic: str) -> None:
         """Fetches pending requests/invites sent while the user was offline."""
-        try:
-            poll_url = f"https://ntfy.sh/{topic}/json?poll=1&since=48h"
-            req = urllib.request.Request(poll_url, headers={"User-Agent": "W3Lounge/1.0"})
-            with urllib.request.urlopen(req, timeout=8.0) as response:
-                for line in response:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if not line_str:
-                        continue
-                    try:
-                        record = json.loads(line_str)
-                        if record.get("event") == "message" and record.get("message"):
-                            data = json.loads(record["message"])
-                            self._process_incoming_dict(data)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"Offline signal poll completed: {e}")
+        for srv in SIGNALING_SERVERS[:2]:
+            try:
+                poll_url = f"{srv}/{topic}/json?poll=1&since=48h"
+                req = urllib.request.Request(poll_url, headers={"User-Agent": "W3Lounge/1.0"})
+                with urllib.request.urlopen(req, timeout=6.0) as response:
+                    for line in response:
+                        line_str = line.decode("utf-8", errors="ignore").strip()
+                        if not line_str:
+                            continue
+                        try:
+                            record = json.loads(line_str)
+                            if record.get("event") == "message" and record.get("message"):
+                                data = json.loads(record["message"])
+                                self._process_incoming_dict(data)
+                        except Exception:
+                            pass
+                break  # Successfully polled primary server
+            except Exception as e:
+                logger.debug(f"Offline signal poll on {srv} completed: {e}")
 
     def _listen_loop(self) -> None:
-        """Streaming loop receiving incoming invites and requests over HTTPS."""
+        """Streaming loop receiving incoming invites and requests over HTTPS with relay failover."""
         topic = self._get_user_topic(self.username)
 
         # 1. Fetch any pending requests sent while user was offline
         self._poll_offline_signals(topic)
 
-        # 2. Open live streaming connection for real-time messages with 48h history catch-up
-        stream_url = f"https://ntfy.sh/{topic}/raw?since=48h"
-
+        # 2. Open live streaming connection for real-time messages with automatic relay cycling
+        srv_idx = 0
         while self._running:
+            srv = SIGNALING_SERVERS[srv_idx % len(SIGNALING_SERVERS)]
+            stream_url = f"{srv}/{topic}/raw?since=48h"
             try:
                 req = urllib.request.Request(stream_url, headers={"User-Agent": "W3Lounge/1.0"})
                 with urllib.request.urlopen(req, timeout=60.0) as response:
@@ -480,7 +480,8 @@ class FriendManager:
                             pass
             except Exception as e:
                 if self._running:
-                    logger.debug(f"Signaling listener reconnecting after: {e}")
+                    logger.debug(f"Signaling listener ({srv}) reconnecting after: {e}")
+                    srv_idx += 1  # Failover to next server on error
                     time.sleep(2.0)
 
     def _process_incoming_dict(self, data: dict) -> None:
