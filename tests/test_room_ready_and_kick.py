@@ -62,3 +62,20 @@ class TestRoomReadyAndKick:
         assert peer_addr not in session.connected_peers
         assert peer_addr not in session.puncher.connected_peers
         assert peer_addr not in session.puncher.peer_names
+
+    def test_start_glow_box_lifecycle(self):
+        import tkinter as tk
+        from src.ui.lounge_frame import StartGlowBox
+
+        root = tk.Tk()
+        root.withdraw()
+        box = StartGlowBox(root)
+        assert not box.is_glowing
+
+        box.start_glow()
+        assert box.is_glowing
+        assert len(box.sparkles) > 0
+
+        box.stop_glow()
+        assert not box.is_glowing
+        root.destroy()

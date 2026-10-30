@@ -9,6 +9,8 @@ Provides:
 """
 
 from pathlib import Path
+import math
+import random
 import threading
 import time
 import tkinter as tk
@@ -310,6 +312,215 @@ class HostGameModal(ctk.CTkToplevel):
         password = self.pw_entry.get().strip() if self.has_pw_var.get() else ""
         self.destroy()
         self.on_host(title, max_players, password)
+
+class StartGlowBox(ctk.CTkFrame):
+    """
+    Pixel-perfect Garena START Button Container with dynamic sparkling,
+    glowing, and circling effect when all room players are ready.
+    """
+    def __init__(
+        self,
+        master,
+        btn_img=None,
+        hover_img=None,
+        dis_img=None,
+        command=None,
+        force_command=None,
+        width: int = 84,
+        height: int = 80,
+        **kwargs
+    ):
+        super().__init__(master, width=width, height=height, fg_color="#101826", corner_radius=6, **kwargs)
+        self.pack_propagate(False)
+        self.btn_img = btn_img
+        self.hover_img = hover_img
+        self.dis_img = dis_img
+        self.command = command
+        self.force_command = force_command
+
+        # Canvas for animated circling beam, neon glow, and shimmering sparkles
+        self.canvas = tk.Canvas(self, bg="#101826", highlightthickness=0)
+        self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
+
+        # Embedded CTkButton (starts centered)
+        self.button = ctk.CTkButton(
+            self,
+            text="",
+            image=btn_img,
+            width=70,
+            height=73,
+            border_spacing=0,
+            fg_color="transparent",
+            hover_color="#182334",
+            corner_radius=4,
+            command=self._on_btn_click
+        )
+        self.button.place(relx=0.5, rely=0.5, anchor="center")
+        self.button.lift()
+
+        # Hover state bindings
+        def _on_enter(e):
+            if self.button.cget("state") == "normal" and self.hover_img:
+                self.button.configure(image=self.hover_img)
+
+        def _on_leave(e):
+            if self.button.cget("state") == "normal" and self.btn_img:
+                self.button.configure(image=self.btn_img)
+
+        self.button.bind("<Enter>", _on_enter)
+        self.button.bind("<Leave>", _on_leave)
+
+        # Allow right-click on button or canvas for force start
+        if force_command:
+            self.button.bind("<Button-3>", force_command)
+            self.canvas.bind("<Button-3>", force_command)
+
+        # Canvas click forwards to button action
+        self.canvas.bind("<Button-1>", lambda e: self._on_btn_click())
+
+        self.is_glowing = False
+        self._anim_job = None
+        self._t = 0.0
+        self._pulse_t = 0.0
+        self.sparkles = []
+
+        self.canvas.bind("<Configure>", lambda e: self._draw_idle())
+
+    def _on_btn_click(self):
+        if self.button.cget("state") == "normal" and self.command:
+            self.command()
+
+    def _draw_idle(self):
+        if self.is_glowing or not self.winfo_exists():
+            return
+        self.canvas.delete("glow")
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w > 10 and h > 10:
+            self.canvas.create_rectangle(3, 3, w - 3, h - 3, outline="#1c2838", width=2, tags="idle")
+
+    def start_glow(self):
+        if self.is_glowing:
+            return
+        self.is_glowing = True
+        self.canvas.delete("idle")
+        self._init_sparkles()
+        self._animate()
+
+    def stop_glow(self):
+        self.is_glowing = False
+        if self._anim_job:
+            try:
+                self.after_cancel(self._anim_job)
+            except Exception:
+                pass
+            self._anim_job = None
+        self.canvas.delete("glow")
+        self._draw_idle()
+
+    def _init_sparkles(self):
+        self.sparkles = []
+        for _ in range(9):
+            self.sparkles.append(self._new_sparkle())
+
+    def _new_sparkle(self):
+        w = max(self.canvas.winfo_width(), 80)
+        h = max(self.canvas.winfo_height(), 80)
+        t = random.random()
+        x, y = self._get_perimeter_point(t, w, h)
+        x += random.randint(-4, 4)
+        y += random.randint(-4, 4)
+        return {
+            "x": x,
+            "y": y,
+            "life": random.uniform(0.0, 0.85),
+            "speed": random.uniform(0.045, 0.095),
+            "max_s": random.randint(4, 7),
+            "color": random.choice([
+                "#ffffff", "#00ffff", "#ffd700", "#fff4aa", "#70e1ff", "#e0ffff", "#f6e58d"
+            ])
+        }
+
+    def _get_perimeter_point(self, t, w, h):
+        m = 3
+        pw = max(w - 2 * m, 10)
+        ph = max(h - 2 * m, 10)
+        perimeter = 2 * (pw + ph)
+        d = (t % 1.0) * perimeter
+        if d < pw:
+            return m + d, m
+        d -= pw
+        if d < ph:
+            return m + pw, m + d
+        d -= ph
+        if d < pw:
+            return m + pw - d, m + ph
+        d -= ph
+        return m, m + ph - d
+
+    def _animate(self):
+        if not self.is_glowing or not self.winfo_exists():
+            return
+
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w < 10 or h < 10:
+            self._anim_job = self.after(33, self._animate)
+            return
+
+        self.canvas.delete("glow")
+
+        # 1. Radiant pulsing neon border
+        self._pulse_t += 0.09
+        pulse = (math.sin(self._pulse_t) + 1.0) / 2.0
+        g = int(80 + pulse * 145)
+        b = int(185 + pulse * 70)
+        glow_color = f"#00{g:02x}{b:02x}"
+        self.canvas.create_rectangle(3, 3, w - 3, h - 3, outline=glow_color, width=2, tags="glow")
+
+        # 2. Circling energy comets (Dual orbiting comets chasing each other)
+        self._t = (self._t + 0.014) % 1.0
+        tail_steps = [
+            (0.000, "#ffffff", 3.8),
+            (0.012, "#e0ffff", 3.2),
+            (0.025, "#00f0ff", 2.8),
+            (0.040, "#00a8ff", 2.3),
+            (0.055, "#0066ff", 1.8),
+            (0.070, "#0033aa", 1.4),
+            (0.085, "#001155", 1.0),
+        ]
+        for offset in (0.0, 0.5):
+            head_t = (self._t + offset) % 1.0
+            # Draw tail points
+            for dt, col, rad in tail_steps:
+                tx, ty = self._get_perimeter_point(head_t - dt, w, h)
+                self.canvas.create_oval(tx - rad, ty - rad, tx + rad, ty + rad, fill=col, outline="", tags="glow")
+            # Starburst at the comet head
+            hx, hy = self._get_perimeter_point(head_t, w, h)
+            self.canvas.create_line(hx - 4, hy, hx + 4, hy, fill="#ffffff", width=1.5, tags="glow")
+            self.canvas.create_line(hx, hy - 4, hx, hy + 4, fill="#ffffff", width=1.5, tags="glow")
+
+        # 3. Shimmering diamond sparkles
+        for i, sp in enumerate(self.sparkles):
+            sp["life"] += sp["speed"]
+            if sp["life"] >= 1.0:
+                self.sparkles[i] = self._new_sparkle()
+                continue
+            cur_s = sp["max_s"] * math.sin(sp["life"] * math.pi)
+            if cur_s > 1:
+                sx, sy = sp["x"], sp["y"]
+                c = sp["color"]
+                # 4-point cross star
+                self.canvas.create_line(sx - cur_s, sy, sx + cur_s, sy, fill=c, width=1.5, tags="glow")
+                self.canvas.create_line(sx, sy - cur_s, sx, sy + cur_s, fill=c, width=1.5, tags="glow")
+                # Secondary diagonal cross for bright bursts
+                if cur_s > 3.5:
+                    diag = cur_s * 0.55
+                    self.canvas.create_line(sx - diag, sy - diag, sx + diag, sy + diag, fill=c, width=1, tags="glow")
+                    self.canvas.create_line(sx - diag, sy + diag, sx + diag, sy - diag, fill=c, width=1, tags="glow")
+                    self.canvas.create_oval(sx - 1.5, sy - 1.5, sx + 1.5, sy + 1.5, fill="#ffffff", outline="", tags="glow")
+
+        self._anim_job = self.after(33, self._animate)
 
 class LoungeFrame(ctk.CTkFrame):
     """Primary application dashboard for Warcraft III Lounge (GameRanger Experience)."""
@@ -928,7 +1139,7 @@ class LoungeFrame(ctk.CTkFrame):
         self.players_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 6))
 
         # ----------------- BOTTOM: Garena START GAME Bar -----------------
-        self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=6, height=80)
+        self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=6, height=84)
         self.room_actions.pack(fill="x", pady=(2, 0))
         self.room_actions.pack_propagate(False)
 
@@ -963,34 +1174,19 @@ class LoungeFrame(ctk.CTkFrame):
             text_color="#f1c40f"
         )
 
-        # Pixel-Perfect Blue Garena START Button
-        self.start_game_btn = ctk.CTkButton(
+        # Pixel-Perfect Blue Garena START Outer Box with Circling Sparkling Glow
+        self.start_glow_box = StartGlowBox(
             self.room_actions,
-            text="",
-            image=self.start_btn_img,
-            width=70,
-            height=73,
-            border_spacing=0,
-            fg_color="transparent",
-            hover_color="#182334",
-            corner_radius=4,
-            command=self._handle_start_game
+            btn_img=self.start_btn_img,
+            hover_img=self.start_btn_hover_img,
+            dis_img=self.start_btn_dis_img,
+            command=self._handle_start_game,
+            force_command=self._handle_force_start_game,
+            width=84,
+            height=80
         )
-        self.start_game_btn.pack(side="right", padx=12, pady=3)
-
-        # Right-click Permissive Force Start for Host
-        self.start_game_btn.bind("<Button-3>", self._handle_force_start_game)
-
-        def _on_btn_enter(e):
-            if self.start_game_btn.cget("state") == "normal" and getattr(self, "start_btn_hover_img", None):
-                self.start_game_btn.configure(image=self.start_btn_hover_img)
-
-        def _on_btn_leave(e):
-            if self.start_game_btn.cget("state") == "normal" and getattr(self, "start_btn_img", None):
-                self.start_game_btn.configure(image=self.start_btn_img)
-
-        self.start_game_btn.bind("<Enter>", _on_btn_enter)
-        self.start_game_btn.bind("<Leave>", _on_btn_leave)
+        self.start_game_btn = self.start_glow_box.button
+        self.start_glow_box.pack(side="right", padx=12, pady=2)
 
     def _clear_chat(self):
         """Clears the room chat display."""
@@ -1020,6 +1216,9 @@ class LoungeFrame(ctk.CTkFrame):
         if not self.session or not self.session.is_host:
             return
 
+        if hasattr(self, "start_glow_box"):
+            self.start_glow_box.stop_glow()
+
         self.start_game_btn.configure(
             state="disabled",
             image=getattr(self, "start_btn_act_img", self.start_btn_img)
@@ -1033,7 +1232,9 @@ class LoungeFrame(ctk.CTkFrame):
 
         # Re-enable button after 5 seconds so host is never permanently locked out
         def reenable_launch():
-            if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
+            if hasattr(self, "_update_start_button_state"):
+                self._update_start_button_state()
+            elif hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
                 self.start_game_btn.configure(
                     state="normal",
                     image=getattr(self, "start_btn_img", None)
@@ -1175,7 +1376,10 @@ class LoungeFrame(ctk.CTkFrame):
                         if username not in self.player_rows:
                             self._add_player_card(username, is_self=False, is_host=False)
 
-                self.start_game_btn.pack(side="right", padx=12, pady=3)
+                if hasattr(self, "start_glow_box") and self.start_glow_box.winfo_exists():
+                    self.start_glow_box.pack(side="right", padx=12, pady=2)
+                elif hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
+                    self.start_game_btn.pack(side="right", padx=12, pady=3)
                 if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
                     self.ready_checkbox.pack(side="left", padx=(16, 12))
                     self.ready_checkbox.select()
@@ -1318,7 +1522,11 @@ class LoungeFrame(ctk.CTkFrame):
                             is_host_peer = True  # As a client, connected peer is the host
                             self._add_player_card(username, is_self=False, is_host=is_host_peer)
 
-                self.start_game_btn.pack_forget()
+                if hasattr(self, "start_glow_box") and self.start_glow_box.winfo_exists():
+                    self.start_glow_box.stop_glow()
+                    self.start_glow_box.pack_forget()
+                elif hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
+                    self.start_game_btn.pack_forget()
                 if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
                     self.host_status_label.pack_forget()
                 if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
@@ -1362,6 +1570,8 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.player_readiness.clear()
         self.is_self_ready = False
+        if hasattr(self, "start_glow_box"):
+            self.start_glow_box.stop_glow()
         if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
             self.ready_checkbox.deselect()
 
@@ -1439,6 +1649,8 @@ class LoungeFrame(ctk.CTkFrame):
             return
 
         if not self.is_self_ready:
+            if hasattr(self, "start_glow_box"):
+                self.start_glow_box.stop_glow()
             self.start_game_btn.configure(
                 state="disabled",
                 image=getattr(self, "start_btn_dis_img", self.start_btn_img)
@@ -1469,6 +1681,8 @@ class LoungeFrame(ctk.CTkFrame):
                 state="normal",
                 image=self.start_btn_img
             )
+            if hasattr(self, "start_glow_box"):
+                self.start_glow_box.start_glow()
             if not non_host_players:
                 self.host_status_label.configure(
                     text="⚔️ Host Console: Solo testing / Ready to launch Warcraft III",
@@ -1480,6 +1694,8 @@ class LoungeFrame(ctk.CTkFrame):
                     text_color="#2ecc71"
                 )
         else:
+            if hasattr(self, "start_glow_box"):
+                self.start_glow_box.stop_glow()
             self.start_game_btn.configure(
                 state="disabled",
                 image=getattr(self, "start_btn_dis_img", self.start_btn_img)
