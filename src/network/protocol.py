@@ -15,7 +15,7 @@ from typing import Optional, Tuple
 
 LOUNGE_PROTOCOL_MAGIC = 0x5733  # 'W3'
 SIGNATURE_LEN = 16              # 128-bit truncated HMAC-SHA256 tag
-MAX_TIMESTAMP_DRIFT_SEC = 15.0  # Max acceptable age of packet (anti-replay)
+MAX_TIMESTAMP_DRIFT_SEC = 300.0 # 5-minute window for anti-replay (generous for unsynced consumer PC clocks)
 
 class LoungeMessageType(IntEnum):
     PUNCH_PROBE = 0x01     # Hole punch exploration packet

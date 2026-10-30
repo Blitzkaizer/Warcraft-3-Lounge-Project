@@ -217,7 +217,12 @@ class AuthManager:
         payload = json.dumps({
             "email": synthetic_email,
             "password": password,
-            "data": {"username": username}
+            "data": {
+                "username": username,
+                "display_name": username,
+                "name": username,
+                "full_name": username
+            }
         }).encode("utf-8")
 
         headers = {
@@ -246,6 +251,9 @@ class AuthManager:
                 msg = f"HTTP Error {e.code}"
             return False, msg
         except Exception as e:
+            err_str = str(e)
+            if "11001" in err_str or "getaddrinfo failed" in err_str:
+                return False, "Cannot reach login server. Check your internet connection or restore your Supabase project."
             return False, f"Network error connecting to auth server: {e}"
 
     def _login_supabase(self, username: str, password: str) -> Tuple[bool, str]:
@@ -271,7 +279,8 @@ class AuthManager:
                 expires_in = data.get("expires_in", 3600)
                 user_obj = data.get("user", {})
                 user_id = user_obj.get("id", "")
-                resolved_username = user_obj.get("user_metadata", {}).get("username", username)
+                meta = user_obj.get("user_metadata", {})
+                resolved_username = meta.get("display_name") or meta.get("username") or username
 
                 self.current_user = UserSession(
                     username=resolved_username,
@@ -293,6 +302,9 @@ class AuthManager:
                 return False, "Incorrect username or password."
             return False, "Invalid username or password."
         except Exception as e:
+            err_str = str(e)
+            if "11001" in err_str or "getaddrinfo failed" in err_str:
+                return False, "Cannot reach login server. Check your internet connection or restore your Supabase project."
             return False, f"Network error during login: {e}"
 
     def refresh_session(self) -> bool:

@@ -89,8 +89,8 @@ class TestNetworkModules(unittest.TestCase):
         # Unpack immediately succeeds
         self.assertIsNotNone(SecureTunnelPacket.unpack(packed, secret_key=key))
 
-        # Tampered stale timestamp (30 seconds in the past) -> must be rejected by anti-replay
-        stale_time = int(time.time() - 40)
+        # Tampered stale timestamp (400 seconds in the past) -> must be rejected by anti-replay
+        stale_time = int(time.time() - 400)
         stale_header = struct.pack("!HI2BH", 0x5733, stale_time, 0x05, 0, len(payload))
         stale_body = stale_header + payload
         stale_tag = SecureTunnelPacket.compute_tag(key, stale_body)

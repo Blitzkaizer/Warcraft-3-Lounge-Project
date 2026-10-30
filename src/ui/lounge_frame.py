@@ -619,7 +619,17 @@ class LoungeFrame(ctk.CTkFrame):
                 self.room_title_label.configure(text=f"🎮 Room: {title} (Host: {self.current_user.username})")
                 self.match_card.configure(fg_color="#1e3799")
                 self.match_card_label.configure(text="Host: Open Warcraft III -> Local Area Network and host match!")
-                self._reset_player_cards(is_host=True)
+
+                # Preserve any player cards already added (e.g. from invite flow)
+                # Only add self if not already present
+                if self.current_user.username not in self.player_rows:
+                    self._add_player_card(self.current_user.username, is_self=True, is_host=True)
+
+                # Also re-add any peers that connected during startup
+                if self.session and self.session.connected_peers:
+                    for peer, username in self.session.connected_peers.items():
+                        if username not in self.player_rows:
+                            self._add_player_card(username, is_self=False, is_host=False)
 
                 self.start_game_btn.pack(fill="x", expand=True)
                 self.client_waiting_badge.pack_forget()
@@ -657,12 +667,21 @@ class LoungeFrame(ctk.CTkFrame):
                 self.match_card_label.configure(text="Connected to Room! Chat with host or wait for game launch.")
                 self._reset_player_cards(is_host=False)
 
+                # Sync any peers that connected before the UI update ran
+                if self.session and self.session.connected_peers:
+                    for peer, username in self.session.connected_peers.items():
+                        if username not in self.player_rows:
+                            is_host_peer = True  # As a client, connected peer is the host
+                            self._add_player_card(username, is_self=False, is_host=is_host_peer)
+
                 self.start_game_btn.pack_forget()
                 self.client_waiting_badge.pack(fill="x", expand=True)
 
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
                 self._append_chat("System", f"Joined room '{self.current_room_title}'! Ready to play.")
+            else:
+                messagebox.showerror("Join Failed", "Could not join room. The room code may be invalid or network initialization failed.")
 
         self.after(0, update)
 
@@ -700,10 +719,17 @@ class LoungeFrame(ctk.CTkFrame):
         self._refresh_rooms_list()
 
     def _add_player_card(self, username: str, is_self: bool = False, is_host: bool = False, initial_text: Optional[str] = None):
-        if username in self.player_rows:
+        target_key = None
+        for key in self.player_rows.keys():
+            if key.lower().strip() == username.lower().strip():
+                target_key = key
+                break
+
+        if target_key:
             if initial_text:
-                _, ping_lbl = self.player_rows[username]
-                ping_lbl.configure(text=initial_text, text_color="gray")
+                _, ping_lbl = self.player_rows[target_key]
+                color = "#2ecc71" if "Connected" in initial_text else "gray"
+                ping_lbl.configure(text=initial_text, text_color=color)
             return
 
         row = ctk.CTkFrame(self.players_scroll, fg_color=("gray90", "#2b2b2b"), corner_radius=6)
@@ -719,7 +745,7 @@ class LoungeFrame(ctk.CTkFrame):
         name_lbl.pack(side="left", padx=10, pady=6)
 
         ping_text = "🟢 Local (0 ms)" if is_self else (initial_text or "⚪ Measuring...")
-        ping_color = "#2ecc71" if is_self else "gray"
+        ping_color = "#2ecc71" if (is_self or (initial_text and "Connected" in initial_text)) else "gray"
         ping_lbl = ctk.CTkLabel(
             row,
             text=ping_text,
@@ -745,12 +771,19 @@ class LoungeFrame(ctk.CTkFrame):
 
     def _on_peer_ping_callback(self, peer_name: str, rtt_ms: float):
         def update():
-            if peer_name not in self.player_rows:
+            target_key = None
+            for key in self.player_rows.keys():
+                if key.lower().strip() == peer_name.lower().strip():
+                    target_key = key
+                    break
+
+            if not target_key:
                 is_host_peer = not (self.session.is_host if self.session else True)
                 self._add_player_card(peer_name, is_self=False, is_host=is_host_peer)
+                target_key = peer_name
 
-            if peer_name in self.player_rows:
-                _, ping_lbl = self.player_rows[peer_name]
+            if target_key in self.player_rows:
+                _, ping_lbl = self.player_rows[target_key]
                 if rtt_ms < 60.0:
                     icon = "🟢"
                     color = "#2ecc71"
@@ -767,7 +800,7 @@ class LoungeFrame(ctk.CTkFrame):
     def _on_peer_joined_callback(self, peer, username):
         def update():
             play_join_sound()
-            self._add_player_card(username, is_self=False, is_host=False)
+            self._add_player_card(username, is_self=False, is_host=False, initial_text="🟢 Connected")
             self._append_chat("System", f"Player '{username}' joined the room!")
         self.after(0, update)
 
@@ -931,7 +964,15 @@ class LoungeFrame(ctk.CTkFrame):
         if not self.session or not self.session.is_host or not self.session.lounge_code:
             self._start_hosting(f"{self.current_user.username}'s Game")
             self._add_player_card(friend, is_self=False, is_host=False, initial_text="⚪ Invited (Connecting...)")
-            self._send_invite_to(friend)
+            # Invite must wait for hosting to finish (lounge_code becomes available)
+            def _wait_and_send_invite():
+                for _ in range(60):  # Wait up to 6 seconds for session to be ready
+                    if self.session and self.session.lounge_code:
+                        self._send_invite_to(friend)
+                        return
+                    time.sleep(0.1)
+                logger.warning(f"Timed out waiting for session to start before sending invite to {friend}")
+            threading.Thread(target=_wait_and_send_invite, daemon=True, name="InviteWaiter").start()
             return
 
         self._add_player_card(friend, is_self=False, is_host=False, initial_text="⚪ Invited (Connecting...)")

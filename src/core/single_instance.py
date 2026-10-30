@@ -28,12 +28,20 @@ class SingleInstanceController:
 
         self.server_sock: Optional[socket.socket] = None
         self._is_running = False
+        self.on_restore_callback: Optional[Callable[[], None]] = None
 
-    def is_primary_instance(self, on_restore_request: Callable[[], None]) -> bool:
+    def is_primary_instance(self, on_restore_request: Optional[Callable[[], None]] = None) -> bool:
         """
         Returns True if this is the only active instance.
         If an active instance already exists, notifies it to restore and returns False.
         """
+        if on_restore_request:
+            self.on_restore_callback = on_restore_request
+
+        # If already listening as primary, do not probe self
+        if self._is_running and self.server_sock:
+            return True
+
         # 1. Probe for existing running instance
         try:
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -76,7 +84,8 @@ class SingleInstanceController:
 
                         if b"RESTORE" in data:
                             logger.info("Received RESTORE signal from secondary instance launch.")
-                            on_restore_request()
+                            if self.on_restore_callback:
+                                self.on_restore_callback()
                     except socket.timeout:
                         continue
                     except OSError:

@@ -26,9 +26,22 @@ class STUNResult:
     public_port: int
     local_port: int
     server_used: str
+    local_ip: str = "127.0.0.1"
 
 class STUNClient:
     """Discovers external public IP and mapped NAT port using STUN."""
+
+    @staticmethod
+    def get_lan_ip() -> str:
+        """Determines the local network (LAN) IP of this machine."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
 
     @staticmethod
     def get_public_mapping(
@@ -99,12 +112,14 @@ class STUNClient:
 
                     if endpoint:
                         pub_ip, pub_port = endpoint
-                        logger.info(f"STUN discovery via {host}:{port} -> Public Endpoint: {pub_ip}:{pub_port} (Local: {local_port})")
+                        lan_ip = cls.get_lan_ip() if hasattr(cls, "get_lan_ip") else STUNClient.get_lan_ip()
+                        logger.info(f"STUN discovery via {host}:{port} -> Public: {pub_ip}:{pub_port} (LAN: {lan_ip}, Local: {local_port})")
                         return STUNResult(
                             public_ip=pub_ip,
                             public_port=pub_port,
                             local_port=local_port,
-                            server_used=f"{host}:{port}"
+                            server_used=f"{host}:{port}",
+                            local_ip=lan_ip
                         )
 
                 except (socket.timeout, OSError) as e:

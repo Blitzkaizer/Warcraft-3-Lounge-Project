@@ -265,9 +265,9 @@ class FriendManager:
             return False, f"Network error sending invite: {e}"
 
     def is_friend_online(self, friend_name: str) -> bool:
-        """Returns True if friend was seen active within the last 40 seconds."""
+        """Returns True if friend was seen active within the last 180 seconds."""
         last_seen = self.online_friends.get(friend_name.lower().strip(), 0.0)
-        return (time.time() - last_seen) < 40.0
+        return (time.time() - last_seen) < 180.0
 
     def _broadcast_presence(self, status: str = "ONLINE"):
         """Sends lightweight presence ping to all mutual friends."""
@@ -294,7 +294,7 @@ class FriendManager:
         # Initial broadcast
         self._broadcast_presence("ONLINE")
         while self._running:
-            time.sleep(20.0)
+            time.sleep(75.0)  # Low-frequency heartbeat to protect ntfy.sh daily quotas
             if self._running:
                 self._broadcast_presence("ONLINE")
                 if self.on_presence_changed:
