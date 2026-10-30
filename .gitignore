@@ -2,13 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.spec
-
-# Environments
-.venv/
-venv/
-ENV/
-
 # Build and Dist
 build/
 dist/Warcraft3Lounge/
