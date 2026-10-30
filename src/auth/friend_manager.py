@@ -272,11 +272,15 @@ class FriendManager:
         """
         Sends an ephemeral direct message to recipient_username over HTTPS signaling.
         Strictly ephemeral: never persisted to disk or remote database.
+        Restricted: Only delivered if the recipient is currently online.
         """
         recipient_username = recipient_username.strip()
         text = text.strip()
         if not recipient_username or not text:
             return False, "Cannot send empty message."
+
+        if not self.is_friend_online(recipient_username):
+            return False, f"Cannot send message: '{recipient_username}' is offline."
 
         topic = self._get_user_topic(recipient_username)
         url = f"https://ntfy.sh/{topic}"

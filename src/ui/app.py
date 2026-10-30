@@ -41,11 +41,11 @@ class W3LoungeApp(ctk.CTk):
             try:
                 self.geometry(saved_geo)
             except Exception:
-                self.geometry("860x580")
+                self.geometry("1024x640")
         else:
-            self.geometry("860x580")
+            self.geometry("1024x640")
 
-        self.minsize(800, 520)
+        self.minsize(920, 560)
 
         self.auth_manager = AuthManager()
         self.current_frame: Optional[ctk.CTkFrame] = None

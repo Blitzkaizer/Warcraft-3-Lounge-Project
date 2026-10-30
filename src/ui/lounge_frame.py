@@ -31,11 +31,22 @@ from ..launcher.game_launcher import GameLauncher
 from ..network.lobby_service import LobbyRoom, LobbyService
 from ..network.lounge_session import LoungeSession
 
+import sys
+from PIL import Image
+
+def _get_asset_path(filename: str) -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base_dir = Path(sys._MEIPASS)
+    else:
+        base_dir = Path(__file__).resolve().parent.parent.parent
+    return base_dir / "assets" / filename
+
 class PrivateChatDialog(ctk.CTkToplevel):
     """
     Ephemeral Direct Message Dialog.
     Strictly in-memory (RAM only) - messages are destroyed when window is closed.
     Never persisted to disk or cloud database.
+    Restricted: Only delivered when the friend is actively online.
     """
 
     def __init__(
@@ -44,13 +55,15 @@ class PrivateChatDialog(ctk.CTkToplevel):
         current_username: str,
         friend_name: str,
         friend_manager: FriendManager,
-        on_close: Optional[Callable[[str], None]] = None
+        on_close: Optional[Callable[[str], None]] = None,
+        is_online: bool = True
     ):
         super().__init__(master)
         self.current_username = current_username
         self.friend_name = friend_name
         self.friend_manager = friend_manager
         self.on_close = on_close
+        self.is_online = is_online
 
         self.title(f"💬 Private Chat - {self.friend_name}")
         self.geometry("420x480")
@@ -68,11 +81,19 @@ class PrivateChatDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
             text_color="#ffffff"
         )
-        title_lbl.pack(side="left", padx=14, pady=8)
+        title_lbl.pack(side="left", padx=(14, 6), pady=8)
+
+        self.status_badge = ctk.CTkLabel(
+            header,
+            text="🟢 Online" if self.is_online else "⚪ Offline",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#2ecc71" if self.is_online else "#7f8c8d"
+        )
+        self.status_badge.pack(side="left", padx=2, pady=8)
 
         notice_lbl = ctk.CTkLabel(
             header,
-            text="🔒 Ephemeral Chat (Destroyed on Close)",
+            text="🔒 Ephemeral Chat (RAM only)",
             font=ctk.CTkFont(family="Segoe UI", size=10, slant="italic"),
             text_color="#8e9297"
         )
@@ -91,12 +112,12 @@ class PrivateChatDialog(ctk.CTkToplevel):
         self.chat_display.configure(state="disabled")
 
         # Bottom Input Row
-        input_frame = ctk.CTkFrame(self, fg_color="transparent")
-        input_frame.pack(fill="x", side="bottom", padx=12, pady=(0, 12))
+        self.input_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.input_frame.pack(fill="x", side="bottom", padx=12, pady=(0, 12))
 
         self.msg_entry = ctk.CTkEntry(
-            input_frame,
-            placeholder_text=f"Message @{self.friend_name}...",
+            self.input_frame,
+            placeholder_text=f"Message @{self.friend_name}..." if self.is_online else f"@{self.friend_name} is offline...",
             fg_color="#40444b",
             border_color="#202225",
             text_color="#ffffff",
@@ -106,20 +127,41 @@ class PrivateChatDialog(ctk.CTkToplevel):
         self.msg_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.msg_entry.bind("<Return>", lambda e: self._send_message())
 
-        send_btn = ctk.CTkButton(
-            input_frame,
+        self.send_btn = ctk.CTkButton(
+            self.input_frame,
             text="Send",
             width=70,
             height=36,
-            fg_color="#5865f2",
-            hover_color="#4752c4",
+            fg_color="#5865f2" if self.is_online else "#4f545c",
+            hover_color="#4752c4" if self.is_online else "#4f545c",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            command=self._send_message
+            command=self._send_message,
+            state="normal" if self.is_online else "disabled"
         )
-        send_btn.pack(side="right")
+        self.send_btn.pack(side="right")
+
+        if not self.is_online:
+            self.msg_entry.configure(state="disabled")
+            self.append_message("System", f"@{self.friend_name} is currently offline. Direct messages require both players to be online.", is_error=True)
 
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
-        self.msg_entry.focus_set()
+        if self.is_online:
+            self.msg_entry.focus_set()
+
+    def update_presence(self, is_online: bool):
+        if self.is_online == is_online:
+            return
+        self.is_online = is_online
+        if is_online:
+            self.status_badge.configure(text="🟢 Online", text_color="#2ecc71")
+            self.msg_entry.configure(state="normal", placeholder_text=f"Message @{self.friend_name}...")
+            self.send_btn.configure(state="normal", fg_color="#5865f2", hover_color="#4752c4")
+            self.append_message("System", f"🟢 @{self.friend_name} came online.")
+        else:
+            self.status_badge.configure(text="⚪ Offline", text_color="#7f8c8d")
+            self.msg_entry.configure(state="disabled", placeholder_text=f"@{self.friend_name} is offline...")
+            self.send_btn.configure(state="disabled", fg_color="#4f545c", hover_color="#4f545c")
+            self.append_message("System", f"⚠️ @{self.friend_name} went offline. Direct messages are restricted.", is_error=True)
 
     def append_message(self, sender: str, text: str, is_error: bool = False):
         t_str = time.strftime("%H:%M")
@@ -132,6 +174,9 @@ class PrivateChatDialog(ctk.CTkToplevel):
         self.chat_display.configure(state="disabled")
 
     def _send_message(self):
+        if not self.is_online:
+            self.append_message("System", f"Cannot send: @{self.friend_name} is offline.", is_error=True)
+            return
         text = self.msg_entry.get().strip()
         if not text:
             return
@@ -347,76 +392,139 @@ class LoungeFrame(ctk.CTkFrame):
         self.after(0, show)
 
     def _build_ui(self):
-        # 1. Top Bar: User info + Logout
-        self.top_bar = ctk.CTkFrame(self, fg_color=("gray85", "#1e1e1e"), height=50)
-        self.top_bar.pack(fill="x", padx=15, pady=(15, 8))
+        # 1. Garena DotA Top Artwork Banner Frame
+        self.banner_frame = ctk.CTkFrame(self, fg_color="#080b10", corner_radius=0, height=88)
+        self.banner_frame.pack(fill="x", side="top")
+        self.banner_frame.pack_propagate(False)
 
-        self.user_label = ctk.CTkLabel(
+        banner_path = _get_asset_path("garena_banner.png")
+        if banner_path.exists():
+            try:
+                raw_banner = Image.open(banner_path)
+                self.banner_img = ctk.CTkImage(light_image=raw_banner, dark_image=raw_banner, size=(660, 88))
+                self.banner_lbl = ctk.CTkLabel(self.banner_frame, image=self.banner_img, text="")
+                self.banner_lbl.pack(expand=True)
+            except Exception as e:
+                logger.debug(f"Could not load banner: {e}")
+
+        # 2. Garena Classic Navigation Bar (Tabs + User Stats + Actions)
+        self.top_bar = ctk.CTkFrame(self, fg_color="#121822", height=42, corner_radius=0)
+        self.top_bar.pack(fill="x", side="top", pady=(0, 2))
+
+        # Garena Tabs
+        self.tab_home_btn = ctk.CTkButton(
             self.top_bar,
-            text=f"🎮 Logged in as: {self.current_user.username}",
-            font=ctk.CTkFont(size=14, weight="bold")
+            text="HOME",
+            width=65,
+            height=30,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#1a232f",
+            hover_color="#243343",
+            command=lambda: self._switch_nav_tab("LOBBY")
         )
-        self.user_label.pack(side="left", padx=(15, 8), pady=10)
+        self.tab_home_btn.pack(side="left", padx=(10, 3), pady=6)
 
-        # Version Badge
-        self.version_badge = ctk.CTkLabel(
+        self.tab_lobby_btn = ctk.CTkButton(
             self.top_bar,
-            text=f"v{APP_VERSION}",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=("#dfe4ea", "#2b2b2b"),
-            corner_radius=6,
-            padx=6,
-            pady=2
+            text="LOBBY",
+            width=70,
+            height=30,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#1e3799",
+            hover_color="#273c75",
+            command=lambda: self._switch_nav_tab("LOBBY")
         )
-        self.version_badge.pack(side="left", padx=2, pady=10)
+        self.tab_lobby_btn.pack(side="left", padx=3, pady=6)
 
+        self.tab_room_btn = ctk.CTkButton(
+            self.top_bar,
+            text="ROOM",
+            width=70,
+            height=30,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#1a232f",
+            hover_color="#243343",
+            command=lambda: self._switch_nav_tab("ROOM")
+        )
+        self.tab_room_btn.pack(side="left", padx=3, pady=6)
+
+        self.room_lvl_badge = ctk.CTkLabel(
+            self.top_bar,
+            text="⚔️ ROOM LVL: 1",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#f39c12"
+        )
+        self.room_lvl_badge.pack(side="left", padx=12, pady=6)
+
+        # Right Bar Controls
         self.logout_btn = ctk.CTkButton(
             self.top_bar,
             text="Logout",
-            width=70,
+            width=65,
             height=28,
             fg_color="#c0392b",
             hover_color="#962d22",
             command=self._handle_logout
         )
-        self.logout_btn.pack(side="right", padx=15, pady=10)
+        self.logout_btn.pack(side="right", padx=(4, 12), pady=6)
 
-        # Sound Mute Toggle (Item 5)
         self.mute_btn = ctk.CTkButton(
             self.top_bar,
             text="🔇 Muted" if is_sound_muted() else "🔊 Sound",
-            width=75,
+            width=72,
             height=28,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             fg_color="#7f8c8d" if is_sound_muted() else "#2980b9",
             hover_color="#95a5a6" if is_sound_muted() else "#3498db",
             command=self._toggle_sound_mute
         )
-        self.mute_btn.pack(side="right", padx=(5, 5), pady=10)
+        self.mute_btn.pack(side="right", padx=4, pady=6)
 
-        # 2. Game Path Bar
-        self.path_bar = ctk.CTkFrame(self, fg_color="transparent")
-        self.path_bar.pack(fill="x", padx=15, pady=(0, 8))
+        self.version_badge = ctk.CTkLabel(
+            self.top_bar,
+            text=f"v{APP_VERSION}",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#1c2833",
+            corner_radius=4,
+            padx=6,
+            pady=2
+        )
+        self.version_badge.pack(side="right", padx=4, pady=6)
+
+        self.user_label = ctk.CTkLabel(
+            self.top_bar,
+            text=f"👤 {self.current_user.username}",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#ecf0f1"
+        )
+        self.user_label.pack(side="right", padx=(8, 4), pady=6)
+
+        # 3. Game Path Sub-Bar (Garena Sub-Tab Style)
+        self.path_bar = ctk.CTkFrame(self, fg_color="#0e131a", height=28, corner_radius=0)
+        self.path_bar.pack(fill="x", padx=0, pady=(0, 6))
 
         self.path_label = ctk.CTkLabel(
             self.path_bar,
             text="Warcraft III Path: Detecting...",
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#7f8c8d",
             anchor="w"
         )
-        self.path_label.pack(side="left", fill="x", expand=True, padx=5)
+        self.path_label.pack(side="left", fill="x", expand=True, padx=12)
 
         self.browse_btn = ctk.CTkButton(
             self.path_bar,
-            text="Browse...",
-            width=80,
-            height=26,
+            text="📁 Browse Executable",
+            width=130,
+            height=22,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color="#2c3e50",
+            hover_color="#34495e",
             command=self._browse_executable
         )
-        self.browse_btn.pack(side="right", padx=5)
+        self.browse_btn.pack(side="right", padx=10, pady=2)
 
-        # 3. Notification Banners
+        # 4. Notification Banners
         self.invite_banner = ctk.CTkFrame(self, fg_color="#16a085", corner_radius=8)
         self.invite_label = ctk.CTkLabel(
             self.invite_banner,
@@ -482,18 +590,18 @@ class LoungeFrame(ctk.CTkFrame):
         )
         self.friend_req_accept_btn.pack(side="right", padx=(10, 5), pady=8)
 
-        # 4. Main 2-Column Split: Left = Friends / Fast Actions, Right = Lobby Browser OR Active Room
+        # 5. Main 2-Column Split: Left = Friends Panel, Right = Lobby Browser OR Active Room
         self.main_split = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_split.pack(fill="both", expand=True, padx=15, pady=(0, 15))
-        self.main_split.columnconfigure(0, weight=0, minsize=240)  # Left panel
-        self.main_split.columnconfigure(1, weight=1)              # Right panel
+        self.main_split.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        self.main_split.columnconfigure(0, weight=0, minsize=220)  # Left Friends panel
+        self.main_split.columnconfigure(1, weight=1)              # Right container
 
-        # Build Left Friends & Quick Test Panel
+        # Build Left Friends Panel
         self._build_friends_panel()
 
         # Build Right Container
         self.lounge_container = ctk.CTkFrame(self.main_split, fg_color="transparent")
-        self.lounge_container.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self.lounge_container.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 
         self.lobby_selection_frame = ctk.CTkFrame(self.lounge_container, fg_color="transparent")
         self.active_room_frame = ctk.CTkFrame(self.lounge_container, fg_color="transparent")
@@ -503,48 +611,74 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.lobby_selection_frame.pack(fill="both", expand=True)
 
+    def _switch_nav_tab(self, tab: str):
+        """Switches top navigation view between Lobby and Active Room."""
+        if tab == "LOBBY":
+            self.tab_lobby_btn.configure(fg_color="#1e3799")
+            self.tab_room_btn.configure(fg_color="#1a232f")
+            self.tab_home_btn.configure(fg_color="#1a232f")
+            self.active_room_frame.pack_forget()
+            self.lobby_selection_frame.pack(fill="both", expand=True)
+            self._refresh_rooms_list()
+        elif tab == "ROOM":
+            if self.session:
+                self.tab_room_btn.configure(fg_color="#1e3799")
+                self.tab_lobby_btn.configure(fg_color="#1a232f")
+                self.tab_home_btn.configure(fg_color="#1a232f")
+                self.lobby_selection_frame.pack_forget()
+                self.active_room_frame.pack(fill="both", expand=True)
+            else:
+                self._open_host_modal()
+
     def _build_friends_panel(self):
-        """Constructs left-hand Friends management & test pane."""
-        self.friends_card = ctk.CTkFrame(self.main_split, corner_radius=10)
-        self.friends_card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        """Constructs left-hand Friends management pane with Garena styling."""
+        self.friends_card = ctk.CTkFrame(self.main_split, fg_color="#10151f", corner_radius=6)
+        self.friends_card.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
 
         # Friends Title
         ctk.CTkLabel(
             self.friends_card,
             text="👥 Friends",
-            font=ctk.CTkFont(size=15, weight="bold")
-        ).pack(pady=(12, 6), padx=15, anchor="w")
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color="#ecf0f1"
+        ).pack(pady=(10, 6), padx=12, anchor="w")
 
         # Add Friend Input + Button
         self.add_friend_box = ctk.CTkFrame(self.friends_card, fg_color="transparent")
-        self.add_friend_box.pack(fill="x", padx=10, pady=(0, 8))
+        self.add_friend_box.pack(fill="x", padx=8, pady=(0, 6))
 
         self.friend_entry = ctk.CTkEntry(
             self.add_friend_box,
             placeholder_text="Username...",
-            height=30,
-            font=ctk.CTkFont(size=12)
+            height=28,
+            fg_color="#18202c",
+            border_color="#243343",
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11)
         )
-        self.friend_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.friend_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
         self.add_friend_btn = ctk.CTkButton(
             self.add_friend_box,
             text="+ Add",
-            width=50,
-            height=30,
+            width=48,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#27ae60",
+            hover_color="#219150",
             command=self._handle_add_friend
         )
         self.add_friend_btn.pack(side="right")
 
         # Friends Scrollable List
         self.friends_scroll = ctk.CTkScrollableFrame(self.friends_card, fg_color="transparent")
-        self.friends_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.friends_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 6))
 
     def _build_lobby_browser_ui(self):
-        """Constructs the GameRanger-style Public Game Browser."""
+        """Constructs the Garena Public Game Browser."""
         # Top Action Bar inside Browser
         browser_header = ctk.CTkFrame(self.lobby_selection_frame, fg_color="transparent")
-        browser_header.pack(fill="x", pady=(0, 8))
+        browser_header.pack(fill="x", pady=(0, 6))
 
         # Host Game Button (Left)
         self.host_game_btn = ctk.CTkButton(
@@ -552,9 +686,9 @@ class LoungeFrame(ctk.CTkFrame):
             text="➕ Host Game",
             width=120,
             height=32,
-            font=ctk.CTkFont(weight="bold"),
-            fg_color="#27ae60",
-            hover_color="#219150",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            fg_color="#1e3799",
+            hover_color="#273c75",
             command=self._open_host_modal
         )
         self.host_game_btn.pack(side="left")
@@ -565,20 +699,21 @@ class LoungeFrame(ctk.CTkFrame):
             text="🔄 Refresh",
             width=80,
             height=32,
-            fg_color="#4b6584",
-            hover_color="#3867d6",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#1c2833",
+            hover_color="#2c3e50",
             command=self._refresh_rooms_list
         )
         self.refresh_btn.pack(side="right")
 
         # Table Header
-        table_hdr = ctk.CTkFrame(self.lobby_selection_frame, fg_color=("#dfe4ea", "#2f3542"), height=30, corner_radius=6)
+        table_hdr = ctk.CTkFrame(self.lobby_selection_frame, fg_color="#141a24", height=28, corner_radius=4)
         table_hdr.pack(fill="x", pady=(0, 4))
 
-        ctk.CTkLabel(table_hdr, text="Game Title", font=ctk.CTkFont(weight="bold", size=12), anchor="w").pack(side="left", fill="x", expand=True, padx=(12, 5))
-        ctk.CTkLabel(table_hdr, text="Host", font=ctk.CTkFont(weight="bold", size=12), width=100, anchor="w").pack(side="left", padx=5)
-        ctk.CTkLabel(table_hdr, text="Players", font=ctk.CTkFont(weight="bold", size=12), width=65).pack(side="left", padx=5)
-        ctk.CTkLabel(table_hdr, text="Action", font=ctk.CTkFont(weight="bold", size=12), width=85).pack(side="right", padx=10)
+        ctk.CTkLabel(table_hdr, text="Game Title", font=ctk.CTkFont(family="Segoe UI", weight="bold", size=11), text_color="#bdc3c7", anchor="w").pack(side="left", fill="x", expand=True, padx=(12, 5))
+        ctk.CTkLabel(table_hdr, text="Host", font=ctk.CTkFont(family="Segoe UI", weight="bold", size=11), text_color="#bdc3c7", width=100, anchor="w").pack(side="left", padx=5)
+        ctk.CTkLabel(table_hdr, text="Players", font=ctk.CTkFont(family="Segoe UI", weight="bold", size=11), text_color="#bdc3c7", width=65).pack(side="left", padx=5)
+        ctk.CTkLabel(table_hdr, text="Action", font=ctk.CTkFont(family="Segoe UI", weight="bold", size=11), text_color="#bdc3c7", width=85).pack(side="right", padx=10)
 
         # Rooms Scrollable Container
         self.rooms_scroll = ctk.CTkScrollableFrame(self.lobby_selection_frame, fg_color="transparent")
@@ -626,30 +761,30 @@ class LoungeFrame(ctk.CTkFrame):
             return
 
         for r in rooms:
-            row = ctk.CTkFrame(self.rooms_scroll, fg_color=("gray92", "#242424"), corner_radius=6, height=42)
-            row.pack(fill="x", pady=3)
+            row = ctk.CTkFrame(self.rooms_scroll, fg_color="#10151f", corner_radius=4, height=38)
+            row.pack(fill="x", pady=2)
 
             room_title = f"🔒 {r.title}" if r.is_locked else f"⚔️ {r.title}"
-            title_lbl = ctk.CTkLabel(row, text=room_title, font=ctk.CTkFont(weight="bold", size=13), anchor="w")
-            title_lbl.pack(side="left", fill="x", expand=True, padx=(12, 5), pady=8)
+            title_lbl = ctk.CTkLabel(row, text=room_title, font=ctk.CTkFont(family="Segoe UI", weight="bold", size=12), text_color="#ecf0f1", anchor="w")
+            title_lbl.pack(side="left", fill="x", expand=True, padx=(12, 5), pady=6)
 
-            host_lbl = ctk.CTkLabel(row, text=r.host_username, text_color="gray", width=100, anchor="w", font=ctk.CTkFont(size=12))
-            host_lbl.pack(side="left", padx=5, pady=8)
+            host_lbl = ctk.CTkLabel(row, text=r.host_username, text_color="#7f8c8d", width=100, anchor="w", font=ctk.CTkFont(size=11))
+            host_lbl.pack(side="left", padx=5, pady=6)
 
-            players_lbl = ctk.CTkLabel(row, text=f"{r.current_players}/{r.max_players}", width=65, font=ctk.CTkFont(size=12, weight="bold"))
-            players_lbl.pack(side="left", padx=5, pady=8)
+            players_lbl = ctk.CTkLabel(row, text=f"{r.current_players}/{r.max_players}", width=65, font=ctk.CTkFont(size=11, weight="bold"), text_color="#f39c12")
+            players_lbl.pack(side="left", padx=5, pady=6)
 
             join_btn = ctk.CTkButton(
                 row,
                 text="Join Game",
                 width=80,
-                height=28,
-                font=ctk.CTkFont(size=12, weight="bold"),
+                height=26,
+                font=ctk.CTkFont(size=11, weight="bold"),
                 fg_color="#27ae60",
                 hover_color="#219150",
                 command=lambda rm=r: self._join_public_room(rm)
             )
-            join_btn.pack(side="right", padx=10, pady=6)
+            join_btn.pack(side="right", padx=10, pady=5)
 
         # Refresh friends list to reflect any friends now hosting rooms
         self._refresh_friends_list()
@@ -660,104 +795,158 @@ class LoungeFrame(ctk.CTkFrame):
         HostGameModal(self, default_title, on_host=self._start_hosting)
 
     def _build_active_room_ui(self):
-        """Constructs the GameRanger-style In-Room Screen with Live Chat & Launch button."""
-        # Top Room Banner
-        self.room_top_bar = ctk.CTkFrame(self.active_room_frame, fg_color=("#dfe4ea", "#242424"), corner_radius=8, height=46)
-        self.room_top_bar.pack(fill="x", pady=(0, 10))
+        """Constructs the classic Garena Room Screen with Live Chat on Left & Player Table on Right."""
+        # Top Room Banner & Match Status Bar
+        self.match_card = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=4, height=36)
+        self.match_card.pack(fill="x", pady=(0, 6))
 
         self.room_title_label = ctk.CTkLabel(
-            self.room_top_bar,
+            self.match_card,
             text="🎮 Warcraft III Lounge Room",
-            font=ctk.CTkFont(size=15, weight="bold")
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color="#00d2d3"
         )
-        self.room_title_label.pack(side="left", padx=15, pady=8)
+        self.room_title_label.pack(side="left", padx=12, pady=6)
+
+        self.match_card_label = ctk.CTkLabel(
+            self.match_card,
+            text="Status: Room open. Waiting for players...",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#bdc3c7"
+        )
+        self.match_card_label.pack(side="left", padx=10, pady=6)
 
         self.leave_btn = ctk.CTkButton(
-            self.room_top_bar,
-            text="Leave Room",
-            width=85,
-            height=28,
+            self.match_card,
+            text="🚪 Leave Room",
+            width=95,
+            height=26,
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#c0392b",
             hover_color="#962d22",
             command=self._leave_lounge
         )
-        self.leave_btn.pack(side="right", padx=12, pady=8)
+        self.leave_btn.pack(side="right", padx=10, pady=5)
 
-        # Match Status Bar
-        self.match_card = ctk.CTkFrame(self.active_room_frame, fg_color="#1e3799", corner_radius=8)
-        self.match_card_label = ctk.CTkLabel(
-            self.match_card,
-            text="Status: Room open. Waiting for players to get ready...",
-            font=ctk.CTkFont(size=13)
-        )
-        self.match_card_label.pack(padx=15, pady=8)
-        self.match_card.pack(fill="x", pady=(0, 10))
-
-        # Main Split inside Room: Left = Players (Roster + Ping), Right = Room Chat
+        # Main Split inside Room: Left = Chat (55%), Right = Garena Player Roster (45%)
         self.room_split = ctk.CTkFrame(self.active_room_frame, fg_color="transparent")
-        self.room_split.pack(fill="both", expand=True, pady=(0, 10))
-        self.room_split.columnconfigure(0, weight=1, minsize=260)  # Players
-        self.room_split.columnconfigure(1, weight=1, minsize=320)  # Chat
+        self.room_split.pack(fill="both", expand=True, pady=(0, 6))
+        self.room_split.columnconfigure(0, weight=6, minsize=320)  # Left: Chat
+        self.room_split.columnconfigure(1, weight=5, minsize=280)  # Right: Player Table
 
-        # Left: Players Panel
-        players_panel = ctk.CTkFrame(self.room_split, corner_radius=8)
-        players_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        # ----------------- LEFT: Live Room Chat Panel (Garena Console) -----------------
+        chat_panel = ctk.CTkFrame(self.room_split, fg_color="#0c1017", corner_radius=6)
+        chat_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
 
-        self.players_header_lbl = ctk.CTkLabel(
-            players_panel,
-            text="👥 Players in Room",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        self.players_header_lbl.pack(anchor="w", padx=12, pady=(10, 4))
-
-        self.players_scroll = ctk.CTkScrollableFrame(players_panel, fg_color="transparent")
-        self.players_scroll.pack(fill="both", expand=True, padx=6, pady=(0, 8))
-
-        # Right: Live Room Chat Panel
-        chat_panel = ctk.CTkFrame(self.room_split, corner_radius=8)
-        chat_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-
+        chat_hdr = ctk.CTkFrame(chat_panel, fg_color="#141a24", height=28, corner_radius=4)
+        chat_hdr.pack(fill="x", padx=6, pady=(6, 4))
         ctk.CTkLabel(
-            chat_panel,
+            chat_hdr,
             text="💬 Room Lobby Chat",
-            font=ctk.CTkFont(size=14, weight="bold")
-        ).pack(anchor="w", padx=12, pady=(10, 4))
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#ecf0f1"
+        ).pack(side="left", padx=10, pady=3)
 
-        self.chat_display = ctk.CTkTextbox(chat_panel, wrap="word", font=ctk.CTkFont(size=12))
-        self.chat_display.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        self.chat_display = ctk.CTkTextbox(
+            chat_panel,
+            fg_color="#080b10",
+            text_color="#dcddde",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            wrap="word",
+            corner_radius=4
+        )
+        self.chat_display.pack(fill="both", expand=True, padx=6, pady=(0, 4))
         self.chat_display.configure(state="disabled")
 
+        # Chat Input Row
         chat_input_box = ctk.CTkFrame(chat_panel, fg_color="transparent")
-        chat_input_box.pack(fill="x", padx=8, pady=(0, 8))
+        chat_input_box.pack(fill="x", padx=6, pady=(0, 4))
 
-        self.chat_entry = ctk.CTkEntry(chat_input_box, placeholder_text="Chat with room players...", height=30)
+        self.chat_entry = ctk.CTkEntry(
+            chat_input_box,
+            placeholder_text="Type a message to room players...",
+            height=30,
+            fg_color="#141a24",
+            border_color="#1c2833",
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=12)
+        )
         self.chat_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.chat_entry.bind("<Return>", lambda event: self._send_room_chat())
 
-        self.chat_send_btn = ctk.CTkButton(chat_input_box, text="Send", width=60, height=30, command=self._send_room_chat)
+        self.chat_send_btn = ctk.CTkButton(
+            chat_input_box,
+            text="Send",
+            width=60,
+            height=30,
+            fg_color="#2980b9",
+            hover_color="#3498db",
+            font=ctk.CTkFont(weight="bold", size=11),
+            command=self._send_room_chat
+        )
         self.chat_send_btn.pack(side="right")
 
-        # Bottom Action Bar
-        self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="transparent")
+        # Chat Action Toolbar (Garena style: Clear Chat)
+        chat_bar = ctk.CTkFrame(chat_panel, fg_color="transparent")
+        chat_bar.pack(fill="x", padx=6, pady=(0, 6))
+
+        clear_btn = ctk.CTkButton(
+            chat_bar,
+            text="🗑️ Clear Chat",
+            width=85,
+            height=24,
+            font=ctk.CTkFont(size=10),
+            fg_color="#2c3e50",
+            hover_color="#34495e",
+            command=self._clear_chat
+        )
+        clear_btn.pack(side="left")
+
+        # ----------------- RIGHT: Garena Player Table -----------------
+        players_panel = ctk.CTkFrame(self.room_split, fg_color="#0c1017", corner_radius=6)
+        players_panel.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+
+        self.players_header_lbl = ctk.CTkLabel(
+            players_panel,
+            text="👥 Players in Room (1)",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#ecf0f1"
+        )
+        self.players_header_lbl.pack(anchor="w", padx=10, pady=(6, 2))
+
+        # Garena Column Header Row
+        tbl_hdr = ctk.CTkFrame(players_panel, fg_color="#141a24", height=26, corner_radius=4)
+        tbl_hdr.pack(fill="x", padx=6, pady=(2, 4))
+        ctk.CTkLabel(tbl_hdr, text="STA", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=30).pack(side="left", padx=2)
+        ctk.CTkLabel(tbl_hdr, text="Lvl", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=28).pack(side="left", padx=2)
+        ctk.CTkLabel(tbl_hdr, text="Username", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", anchor="w").pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkLabel(tbl_hdr, text="Ping", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=58).pack(side="left", padx=2)
+        ctk.CTkLabel(tbl_hdr, text="Rank", font=ctk.CTkFont(size=10, weight="bold"), text_color="#bdc3c7", width=48).pack(side="right", padx=6)
+
+        self.players_scroll = ctk.CTkScrollableFrame(players_panel, fg_color="transparent")
+        self.players_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 6))
+
+        # ----------------- BOTTOM: Garena START GAME Bar -----------------
+        self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=6, height=52)
         self.room_actions.pack(fill="x", pady=(2, 0))
 
-        # Host START GAME button (GameRanger style sync launch)
+        # Host START GAME button (Big Metallic Garena Style)
         self.start_game_btn = ctk.CTkButton(
             self.room_actions,
             text="🚀 START GAME (Launch All Players)",
-            height=44,
-            font=ctk.CTkFont(size=15, weight="bold"),
+            height=40,
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
             fg_color="#27ae60",
             hover_color="#219150",
             command=self._handle_start_game
         )
-        self.start_game_btn.pack(side="left", fill="x", expand=True)
+        self.start_game_btn.pack(side="left", fill="x", expand=True, padx=10, pady=6)
 
         # Client Waiting Status Badge
         self.client_waiting_badge = ctk.CTkLabel(
             self.room_actions,
             text="⏳ Waiting for Host to Launch Game...",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
             text_color="#f1c40f"
         )
 
@@ -1098,6 +1287,8 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.active_room_frame.pack_forget()
         self.lobby_selection_frame.pack(fill="both", expand=True)
+        self.tab_lobby_btn.configure(fg_color="#1e3799")
+        self.tab_room_btn.configure(fg_color="#1a232f")
         self._refresh_rooms_list()
 
     def _add_player_card(self, username: str, is_self: bool = False, is_host: bool = False, initial_text: Optional[str] = None):
@@ -1109,34 +1300,72 @@ class LoungeFrame(ctk.CTkFrame):
 
         if target_key:
             if initial_text:
-                _, ping_lbl = self.player_rows[target_key]
-                color = "#2ecc71" if "Connected" in initial_text else "gray"
-                ping_lbl.configure(text=initial_text, text_color=color)
+                entry = self.player_rows[target_key]
+                color = "#2ecc71" if "Connected" in initial_text else "#7f8c8d"
+                entry["ping"].configure(text=initial_text, text_color=color)
             return
 
-        row = ctk.CTkFrame(self.players_scroll, fg_color=("gray90", "#2b2b2b"), corner_radius=6)
-        row.pack(fill="x", pady=3, padx=2)
+        row = ctk.CTkFrame(self.players_scroll, fg_color="#141a24", corner_radius=4, height=30)
+        row.pack(fill="x", pady=2, padx=2)
 
-        role_tag = " (Host / You)" if (is_self and is_host) else (" (You)" if is_self else (" (Host)" if is_host else ""))
+        # 1. STA Icon (Status: 💬 chatting or ⚔️ in-game)
+        sta_lbl = ctk.CTkLabel(row, text="💬", width=30, font=ctk.CTkFont(size=12))
+        sta_lbl.pack(side="left", padx=2, pady=3)
+
+        # 2. Lvl (Host = 25, Client = 1)
+        lvl_val = "25" if is_host else "1"
+        lvl_lbl = ctk.CTkLabel(
+            row,
+            text=lvl_val,
+            width=28,
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            text_color="#f39c12" if is_host else "#bdc3c7"
+        )
+        lvl_lbl.pack(side="left", padx=2, pady=3)
+
+        # 3. Username
+        tag = " (You)" if is_self else ""
         name_lbl = ctk.CTkLabel(
             row,
-            text=f"👤 {username}{role_tag}",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            text=f"{username}{tag}",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#ffffff",
             anchor="w"
         )
-        name_lbl.pack(side="left", padx=10, pady=6)
+        name_lbl.pack(side="left", fill="x", expand=True, padx=4, pady=3)
 
-        ping_text = "🟢 Local (0 ms)" if is_self else (initial_text or "⚪ Measuring...")
-        ping_color = "#2ecc71" if (is_self or (initial_text and "Connected" in initial_text)) else "gray"
+        # 4. Ping
+        ping_text = "0 ms" if is_self else (initial_text or "...")
+        ping_color = "#2ecc71" if (is_self or (initial_text and "Connected" in initial_text)) else "#7f8c8d"
         ping_lbl = ctk.CTkLabel(
             row,
             text=ping_text,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            width=58,
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
             text_color=ping_color
         )
-        ping_lbl.pack(side="right", padx=10, pady=6)
+        ping_lbl.pack(side="left", padx=2, pady=3)
 
-        self.player_rows[username] = (row, ping_lbl)
+        # 5. Rank
+        rank_text = "Host" if is_host else "Player"
+        rank_color = "#e67e22" if is_host else "#7f8c8d"
+        rank_lbl = ctk.CTkLabel(
+            row,
+            text=rank_text,
+            width=48,
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=rank_color
+        )
+        rank_lbl.pack(side="right", padx=6, pady=3)
+
+        self.player_rows[username] = {
+            "row": row,
+            "ping": ping_lbl,
+            "sta": sta_lbl,
+            "lvl": lvl_lbl,
+            "name": name_lbl,
+            "rank": rank_lbl
+        }
         self._update_players_count_display()
 
     def _reset_player_cards(self, is_host: bool):
@@ -1165,24 +1394,21 @@ class LoungeFrame(ctk.CTkFrame):
                 target_key = peer_name
 
             if target_key in self.player_rows:
-                _, ping_lbl = self.player_rows[target_key]
+                entry = self.player_rows[target_key]
                 if rtt_ms < 60.0:
-                    icon = "🟢"
                     color = "#2ecc71"
                 elif rtt_ms < 120.0:
-                    icon = "🟡"
                     color = "#f1c40f"
                 else:
-                    icon = "🔴"
                     color = "#e74c3c"
-                ping_lbl.configure(text=f"{icon} {int(rtt_ms)} ms", text_color=color)
+                entry["ping"].configure(text=f"{int(rtt_ms)} ms", text_color=color)
 
         self.after(0, update)
 
     def _on_peer_joined_callback(self, peer, username):
         def update():
             play_join_sound()
-            self._add_player_card(username, is_self=False, is_host=False, initial_text="🟢 Connected")
+            self._add_player_card(username, is_self=False, is_host=False, initial_text="Connected")
             self._append_chat("System", f"Player '{username}' joined the room!")
         self.after(0, update)
 
@@ -1195,8 +1421,11 @@ class LoungeFrame(ctk.CTkFrame):
                     target_key = p
                     break
             if target_key:
-                row, _ = self.player_rows.pop(target_key)
-                row.destroy()
+                p_data = self.player_rows.pop(target_key)
+                if isinstance(p_data, dict):
+                    p_data["row"].destroy()
+                elif isinstance(p_data, tuple):
+                    p_data[0].destroy()
                 self._update_players_count_display()
                 self._append_chat("System", f"Player '{username}' left the room.")
         self.after(0, update)
@@ -1207,6 +1436,11 @@ class LoungeFrame(ctk.CTkFrame):
             self.match_card_label.configure(
                 text=f"Match Live: '{match_name}' | Slots: {open_slots}/{total_slots} | Visible in WC3 LAN!"
             )
+            for p_dict in self.player_rows.values():
+                try:
+                    p_dict["sta"].configure(text="⚔️")
+                except Exception:
+                    pass
         self.after(0, update)
 
     def _launch_game(self):
@@ -1237,6 +1471,12 @@ class LoungeFrame(ctk.CTkFrame):
 
     # Friends List & Signaling Handlers
     def _refresh_friends_list(self):
+        # Update any open Private Chat dialogs with latest online presence
+        for f_name, dialog in list(self._active_pm_dialogs.items()):
+            if dialog and dialog.winfo_exists():
+                is_on = self._is_friend_online_or_hosting(dialog.friend_name)
+                dialog.update_presence(is_on)
+
         for child in self.friends_scroll.winfo_children():
             child.destroy()
 
@@ -1253,8 +1493,8 @@ class LoungeFrame(ctk.CTkFrame):
             return
 
         for friend in friends:
-            row = ctk.CTkFrame(self.friends_scroll, fg_color=("gray90", "#2b2b2b"), corner_radius=6)
-            row.pack(fill="x", pady=3, padx=2)
+            row = ctk.CTkFrame(self.friends_scroll, fg_color="#141a24", corner_radius=4)
+            row.pack(fill="x", pady=2, padx=2)
 
             is_online = self._is_friend_online_or_hosting(friend)
             dot_char = "🟢" if is_online else "⚪"
@@ -1265,25 +1505,26 @@ class LoungeFrame(ctk.CTkFrame):
                 text=dot_char,
                 font=ctk.CTkFont(size=12),
                 text_color=dot_color,
-                width=20
+                width=18
             )
-            status_lbl.pack(side="left", padx=(8, 2), pady=5)
+            status_lbl.pack(side="left", padx=(6, 2), pady=4)
 
             name_lbl = ctk.CTkLabel(
                 row,
                 text=friend,
-                font=ctk.CTkFont(size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+                text_color="#ecf0f1",
                 anchor="w"
             )
-            name_lbl.pack(side="left", fill="x", expand=True, padx=(2, 5), pady=5)
+            name_lbl.pack(side="left", fill="x", expand=True, padx=(2, 4), pady=4)
 
             # Invite Button: strictly enabled only if friend is online!
             if is_online:
                 invite_btn = ctk.CTkButton(
                     row,
                     text="Invite",
-                    width=65,
-                    height=26,
+                    width=60,
+                    height=24,
                     font=ctk.CTkFont(size=11, weight="bold"),
                     fg_color="#27ae60",
                     hover_color="#219150",
@@ -1294,26 +1535,35 @@ class LoungeFrame(ctk.CTkFrame):
                 invite_btn = ctk.CTkButton(
                     row,
                     text="Offline",
-                    width=65,
-                    height=26,
-                    font=ctk.CTkFont(size=11),
-                    fg_color=("#bdc3c7", "#3d3d3d"),
-                    text_color=("gray30", "gray70"),
+                    width=60,
+                    height=24,
+                    font=ctk.CTkFont(size=10),
+                    fg_color="#1c2833",
+                    text_color="#7f8c8d",
                     state="disabled"
                 )
-            invite_btn.pack(side="right", padx=6, pady=5)
+            invite_btn.pack(side="right", padx=6, pady=4)
 
             # Right-click context menu on row & label for Private Message and Remove Friend
-            def show_friend_menu(event, f=friend, b=invite_btn):
+            def show_friend_menu(event, f=friend, b=invite_btn, online=is_online):
                 menu = tk.Menu(self, tearoff=0)
-                menu.add_command(
-                    label=f"💬 Private Message '{f}'",
-                    command=lambda: self._open_private_chat(f)
-                )
-                if self._is_friend_online_or_hosting(f):
+                if online:
+                    menu.add_command(
+                        label=f"💬 Private Message '{f}'",
+                        command=lambda: self._open_private_chat(f)
+                    )
                     menu.add_command(
                         label=f"🎮 Invite '{f}'",
                         command=lambda: self._handle_invite_friend(f, b)
+                    )
+                else:
+                    menu.add_command(
+                        label=f"💬 Private Message '{f}' (Offline)",
+                        state="disabled"
+                    )
+                    menu.add_command(
+                        label=f"🎮 Invite '{f}' (Offline)",
+                        state="disabled"
                     )
                 menu.add_separator()
                 menu.add_command(
@@ -1325,15 +1575,17 @@ class LoungeFrame(ctk.CTkFrame):
                 finally:
                     menu.grab_release()
 
-            row.bind("<Button-3>", lambda e, f=friend, b=invite_btn: show_friend_menu(e, f, b))
-            name_lbl.bind("<Button-3>", lambda e, f=friend, b=invite_btn: show_friend_menu(e, f, b))
-            status_lbl.bind("<Button-3>", lambda e, f=friend, b=invite_btn: show_friend_menu(e, f, b))
+            row.bind("<Button-3>", lambda e, f=friend, b=invite_btn, on=is_online: show_friend_menu(e, f, b, on))
+            name_lbl.bind("<Button-3>", lambda e, f=friend, b=invite_btn, on=is_online: show_friend_menu(e, f, b, on))
+            status_lbl.bind("<Button-3>", lambda e, f=friend, b=invite_btn, on=is_online: show_friend_menu(e, f, b, on))
 
-    def _open_private_chat(self, friend_name: str) -> PrivateChatDialog:
+    def _open_private_chat(self, friend_name: str) -> Optional[PrivateChatDialog]:
         """Opens or brings to front an ephemeral in-memory direct message dialog."""
+        is_online = self._is_friend_online_or_hosting(friend_name)
         key = friend_name.lower().strip()
         dialog = self._active_pm_dialogs.get(key)
         if dialog and dialog.winfo_exists():
+            dialog.update_presence(is_online)
             dialog.lift()
             dialog.focus_force()
             return dialog
@@ -1343,7 +1595,8 @@ class LoungeFrame(ctk.CTkFrame):
             current_username=self.current_user.username,
             friend_name=friend_name,
             friend_manager=self.friend_manager,
-            on_close=self._on_private_chat_closed
+            on_close=self._on_private_chat_closed,
+            is_online=is_online
         )
         self._active_pm_dialogs[key] = dialog
         dialog.lift()

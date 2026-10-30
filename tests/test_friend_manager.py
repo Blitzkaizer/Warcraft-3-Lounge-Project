@@ -69,6 +69,17 @@ class TestFriendManager(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0], ("Thrall", "For the Horde!"))
 
+    def test_direct_message_offline_restriction(self):
+        # When friend is offline, send_direct_message must reject delivery
+        ok, err = self.fm.send_direct_message("OfflineFriend", "Hey are you there?")
+        self.assertFalse(ok)
+        self.assertIn("offline", err.lower())
+
+        # When friend is online, rejection should not be triggered on offline check
+        import time
+        self.fm.online_friends["onlinefriend"] = time.time()
+        self.assertTrue(self.fm.is_friend_online("onlinefriend"))
+
     def test_game_invite_candidates(self):
         invite = GameInvite(
             host_username="blitz",
