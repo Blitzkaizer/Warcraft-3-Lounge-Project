@@ -16,7 +16,7 @@ from typing import Callable, List, Optional, Set, Tuple
 import urllib.error
 import urllib.request
 
-from ..core.config import logger
+from ..core.config import APP_VERSION, logger
 
 # App-level HMAC key for ntfy.sh topic derivation.
 # Makes topics uncomputable without this key (requires binary reverse-engineering).
@@ -31,6 +31,7 @@ class GameInvite:
     timestamp: float
     local_port: int = 0
     local_ip: str = ""
+    app_version: str = "1.0.0"
 
 class FriendManager:
     """
@@ -59,6 +60,7 @@ class FriendManager:
         self.on_friend_accepted: Optional[Callable[[str], None]] = None
         self.on_presence_changed: Optional[Callable[[], None]] = None
         self.on_direct_message_received: Optional[Callable[[str, str], None]] = None
+        self.on_nat_traversal_syn: Optional[Callable[[str, str, int, str, int, str], None]] = None
 
     def _ensure_config_dir(self) -> None:
         try:
@@ -239,7 +241,8 @@ class FriendManager:
             "to": recipient_username,
             "code": room_code,
             "ts": time.time(),
-            "type": "GAME_INVITE"
+            "type": "GAME_INVITE",
+            "version": APP_VERSION
         }
         if local_port:
             payload_dict["local_port"] = local_port
@@ -303,6 +306,49 @@ class FriendManager:
             logger.error(f"Failed to send direct message to {recipient_username}: {e}")
             return False, f"Failed to deliver: {e}"
 
+    def send_nat_traversal_syn(
+        self,
+        host_username: str,
+        client_pub_ip: str,
+        client_pub_port: int,
+        client_lan_ip: str = "",
+        client_local_port: int = 0
+    ) -> None:
+        """Sends instant signal to Host so Host's router pierces outbound NAT hole for this client."""
+        host_username = host_username.strip()
+        if not host_username:
+            return
+
+        topic = self._get_user_topic(host_username)
+        url = f"https://ntfy.sh/{topic}"
+
+        payload = json.dumps({
+            "from": self.username,
+            "to": host_username,
+            "type": "NAT_TRAVERSAL_SYN",
+            "client_pub_ip": client_pub_ip,
+            "client_pub_port": client_pub_port,
+            "client_lan_ip": client_lan_ip,
+            "client_local_port": client_local_port,
+            "version": APP_VERSION,
+            "ts": time.time()
+        }).encode("utf-8")
+
+        headers = {
+            "Priority": "urgent",
+            "Tags": "incoming_envelope"
+        }
+
+        def _do_send():
+            try:
+                req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+                urllib.request.urlopen(req, timeout=4.0)
+                logger.info(f"Dispatched NAT_TRAVERSAL_SYN from '{self.username}' to Host '{host_username}'")
+            except Exception as e:
+                logger.debug(f"Failed to dispatch NAT_TRAVERSAL_SYN: {e}")
+
+        threading.Thread(target=_do_send, daemon=True, name="NAT-Syn-Sender").start()
+
     def is_friend_online(self, friend_name: str) -> bool:
         """Returns True if friend was seen active within the last 180 seconds."""
         last_seen = self.online_friends.get(friend_name.lower().strip(), 0.0)
@@ -348,9 +394,10 @@ class FriendManager:
         on_friend_request: Optional[Callable[[str], None]] = None,
         on_friend_accepted: Optional[Callable[[str], None]] = None,
         on_presence_changed: Optional[Callable[[], None]] = None,
-        on_direct_message: Optional[Callable[[str, str], None]] = None
+        on_direct_message: Optional[Callable[[str, str], None]] = None,
+        on_nat_syn: Optional[Callable[[str, str, int, str, int, str], None]] = None
     ) -> None:
-        """Starts real-time listener for incoming game invites, friend requests, presence, and direct messages."""
+        """Starts real-time listener for incoming game invites, friend requests, presence, PMs, and NAT syn."""
         if on_invite:
             self.on_invite_received = on_invite
         if on_friend_request:
@@ -361,6 +408,8 @@ class FriendManager:
             self.on_presence_changed = on_presence_changed
         if on_direct_message:
             self.on_direct_message_received = on_direct_message
+        if on_nat_syn:
+            self.on_nat_traversal_syn = on_nat_syn
 
         if self._running:
             return
@@ -453,15 +502,17 @@ class FriendManager:
                 return
             code = data.get("code", "")
             if code and self.on_invite_received:
+                app_version = str(data.get("version", "1.0.0"))
                 invite = GameInvite(
                     host_username=sender,
                     recipient_username=self.username,
                     room_code=code,
                     timestamp=ts,
                     local_port=int(data.get("local_port", 0)),
-                    local_ip=str(data.get("local_ip", ""))
+                    local_ip=str(data.get("local_ip", "")),
+                    app_version=app_version
                 )
-                logger.info(f"Received valid game invite from '{sender}' (local_port={invite.local_port})")
+                logger.info(f"Received valid game invite from '{sender}' (local_port={invite.local_port}, v{app_version})")
                 self.on_invite_received(invite)
 
         elif sig_type == "FRIEND_REQUEST":
@@ -505,3 +556,16 @@ class FriendManager:
             if msg_text and self.on_direct_message_received:
                 logger.info(f"Received Direct Message from '{sender}'")
                 self.on_direct_message_received(sender, msg_text)
+
+        elif sig_type == "NAT_TRAVERSAL_SYN":
+            # Traversal signals expire after 45 seconds
+            if now - ts > 45.0:
+                return
+            c_pub_ip = str(data.get("client_pub_ip", "")).strip()
+            c_pub_port = int(data.get("client_pub_port", 0))
+            c_lan_ip = str(data.get("client_lan_ip", "")).strip()
+            c_local_p = int(data.get("client_local_port", 0))
+            ver = str(data.get("version", "1.0.0")).strip()
+            if c_pub_ip and c_pub_port and self.on_nat_traversal_syn:
+                logger.info(f"Received NAT_TRAVERSAL_SYN from '{sender}' ({c_pub_ip}:{c_pub_port}, v{ver})")
+                self.on_nat_traversal_syn(sender, c_pub_ip, c_pub_port, c_lan_ip, c_local_p, ver)

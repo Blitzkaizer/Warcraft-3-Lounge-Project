@@ -176,13 +176,14 @@ class LoungeFrame(ctk.CTkFrame):
         self._refresh_game_path_ui()
         self._refresh_friends_list()
 
-        # Start signaling listener for friend requests, direct invites, presence, and PMs
+        # Start signaling listener for friend requests, direct invites, presence, PMs, and NAT traversal
         self.friend_manager.start_listening(
             on_invite=self._handle_incoming_invite,
             on_friend_request=self._handle_incoming_friend_request,
             on_friend_accepted=self._handle_friend_accepted,
             on_presence_changed=lambda: self.after(0, self._refresh_friends_list),
-            on_direct_message=self._handle_incoming_direct_message
+            on_direct_message=self._handle_incoming_direct_message,
+            on_nat_syn=self._handle_incoming_nat_syn
         )
 
         # Start live lobby browser polling
@@ -767,16 +768,68 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.after(0, update)
 
+    def _handle_incoming_nat_syn(
+        self,
+        sender: str,
+        client_pub_ip: str,
+        client_pub_port: int,
+        client_lan_ip: str,
+        client_local_port: int,
+        client_version: str
+    ):
+        """Host: punches outbound hole toward joining client so host firewall permits inbound traffic."""
+        if not self.session or not self.session.is_host:
+            return
+
+        if client_version != APP_VERSION:
+            logger.warning(f"Peer '{sender}' is running version v{client_version} (Host on v{APP_VERSION})")
+            self.after(0, lambda: self._append_chat("System", f"⚠️ Notice: '{sender}' is running v{client_version}. Both players should run v{APP_VERSION}."))
+
+        fallbacks = []
+        if client_local_port:
+            fallbacks.append(("127.0.0.1", client_local_port))
+            if client_lan_ip and client_lan_ip != "127.0.0.1":
+                fallbacks.append((client_lan_ip, client_local_port))
+
+        self.session.punch_toward_peer(client_pub_ip, client_pub_port, fallback_targets=fallbacks)
+
     def _join_public_room(self, room: LobbyRoom):
         """1-Click Join from Public Lobby Browser."""
         self.current_room_title = room.title
         threading.Thread(
             target=self._async_join,
-            args=(room.lounge_code, room.local_port, room.local_ip),
+            args=(room.lounge_code, room.local_port, room.local_ip, room.host_username, room.app_version),
             daemon=True
         ).start()
 
-    def _async_join(self, code: str, local_port: int = 0, local_ip: str = ""):
+    def _async_join(
+        self,
+        code: str,
+        local_port: int = 0,
+        local_ip: str = "",
+        host_username: str = "",
+        expected_version: str = ""
+    ):
+        if expected_version and expected_version != APP_VERSION:
+            def warn_ver():
+                messagebox.showwarning(
+                    "Version Mismatch",
+                    f"Room host is running v{expected_version}, but you are running v{APP_VERSION}.\n\n"
+                    f"Both players must update to v{APP_VERSION} for multiplayer to work properly."
+                )
+            self.after(0, warn_ver)
+
+        from ..core.tcp_tunnel import ClientTCPBridge
+        if ClientTCPBridge.is_port_in_use(WC3_DEFAULT_PORT):
+            def port_err():
+                messagebox.showerror(
+                    "Port Conflict",
+                    "Warcraft III port 6112 is already in use by another program or Warcraft III.\n\n"
+                    "Please close Warcraft III first, then click 'Join Game'. (The app will automatically launch Warcraft III for you when the host starts the game.)"
+                )
+            self.after(0, port_err)
+            return
+
         self.session = LoungeSession(is_host=False, player_name=self.current_user.username)
         self.session.on_peer_joined = self._on_peer_joined_callback
         self.session.on_peer_left = self._on_peer_left_callback
@@ -785,7 +838,16 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.on_chat_received = self._on_chat_received_callback
         self.session.on_game_launched = self._on_game_launched_callback
 
-        success = self.session.join_lounge(code, local_port=local_port, local_ip=local_ip)
+        def _send_punch_syn(h_user, c_ip, c_port, c_lan, c_lport):
+            self.friend_manager.send_nat_traversal_syn(h_user, c_ip, c_port, c_lan, c_lport)
+
+        success = self.session.join_lounge(
+            code,
+            local_port=local_port,
+            local_ip=local_ip,
+            host_username=host_username,
+            on_request_host_punch=_send_punch_syn
+        )
 
         def update():
             if success:
@@ -808,7 +870,17 @@ class LoungeFrame(ctk.CTkFrame):
                 self.active_room_frame.pack(fill="both", expand=True)
                 self._append_chat("System", f"Joined room '{self.current_room_title}'! Ready to play.")
             else:
-                messagebox.showerror("Join Failed", "Could not join room. The room code may be invalid or network initialization failed.")
+                from ..core.tcp_tunnel import ClientTCPBridge
+                if ClientTCPBridge.is_port_in_use(WC3_DEFAULT_PORT):
+                    messagebox.showerror(
+                        "Port Conflict",
+                        "Warcraft III port 6112 is in use. Please close Warcraft III before joining."
+                    )
+                else:
+                    messagebox.showerror(
+                        "Join Failed",
+                        "Could not connect to host. The room code may be invalid, or network initialization timed out."
+                    )
 
         self.after(0, update)
 
@@ -1213,7 +1285,7 @@ class LoungeFrame(ctk.CTkFrame):
         self.current_room_title = f"{invite.host_username}'s Game"
         threading.Thread(
             target=self._async_join,
-            args=(invite.room_code, invite.local_port, invite.local_ip),
+            args=(invite.room_code, invite.local_port, invite.local_ip, invite.host_username, invite.app_version),
             daemon=True
         ).start()
 

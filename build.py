@@ -71,9 +71,12 @@ def build_exe():
             break
 
     if iscc_path:
+        from src.core.config import APP_VERSION
         iss_file = Path("installer") / "installer.iss"
         subprocess.run([str(iscc_path), str(iss_file)], check=True)
-        print("Compiled dist\\Warcraft3Lounge_Setup_v1.0.0.exe successfully.")
+        setup_name = f"Warcraft3Lounge_Setup_v{APP_VERSION}.exe"
+        zip_name = f"Warcraft3Lounge_Setup_v{APP_VERSION}.zip"
+        print(f"Compiled dist\\{setup_name} successfully.")
 
         # Sign with Authenticode
         cert_script = Path("installer") / "make_cert_and_sign.ps1"
@@ -81,20 +84,20 @@ def build_exe():
             subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(cert_script)], check=False)
 
         # Create distribution setup ZIP
-        setup_exe = Path("dist") / "Warcraft3Lounge_Setup_v1.0.0.exe"
-        setup_zip = Path("dist") / "Warcraft3Lounge_Setup_v1.0.0.zip"
+        setup_exe = Path("dist") / setup_name
+        setup_zip = Path("dist") / zip_name
         if setup_exe.is_file():
             import zipfile
             with zipfile.ZipFile(setup_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.write(setup_exe, arcname="Warcraft3Lounge_Setup_v1.0.0.exe")
+                zf.write(setup_exe, arcname=setup_name)
             print(f"Created Setup Distribution ZIP: {setup_zip.name}")
     else:
         print("Warning: ISCC.exe not found. Run installer\\build_installer.ps1 after installing Inno Setup.")
 
     print("\n=======================================================")
     print("  OFFICIAL INSTALLER BUILD COMPLETE!")
-    print("  1. Setup Wizard: dist\\Warcraft3Lounge_Setup_v1.0.0.exe")
-    print("  2. Setup ZIP:    dist\\Warcraft3Lounge_Setup_v1.0.0.zip")
+    print(f"  1. Setup Wizard: dist\\{setup_name}")
+    print(f"  2. Setup ZIP:    dist\\{zip_name}")
     print("=======================================================\n")
 
 if __name__ == "__main__":

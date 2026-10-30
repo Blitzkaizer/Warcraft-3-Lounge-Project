@@ -33,10 +33,28 @@ class ClientTCPBridge:
 
         self.active_streams: Dict[int, socket.socket] = {}
         self._next_stream_id = 1
+        self.last_error: Optional[str] = None
+
+    @staticmethod
+    def is_port_in_use(port: int = WC3_DEFAULT_PORT) -> bool:
+        """Checks if local TCP port is already bound by Warcraft III or another program."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Do not use SO_REUSEADDR for testing exclusive availability
+            s.bind(("127.0.0.1", port))
+            s.close()
+            return False
+        except OSError:
+            return True
 
     def start(self) -> bool:
         if self._is_running:
             return True
+
+        if self.is_port_in_use(self.local_bind_port):
+            self.last_error = f"Port {self.local_bind_port} is already in use by Warcraft III or another program."
+            logger.error(self.last_error)
+            return False
 
         try:
             self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional
 import urllib.error
 import urllib.request
 
-from ..core.config import logger
+from ..core.config import APP_VERSION, logger
 
 GLOBAL_LOBBY_TOPIC = "w3l_global_lobby_v1"
 
@@ -28,6 +28,7 @@ class LobbyRoom:
     local_port: int = 0
     local_ip: str = ""
     last_seen: float = 0.0
+    app_version: str = "1.0.0"
 
 class LobbyService:
     """
@@ -101,6 +102,7 @@ class LobbyService:
                 "code": room.lounge_code,
                 "max_players": room.max_players,
                 "current_players": room.current_players,
+                "version": APP_VERSION,
                 "ts": time.time()
             }).encode("utf-8")
             req = urllib.request.Request(url, data=payload, method="POST")
@@ -144,7 +146,8 @@ class LobbyService:
                                         current_players=msg.get("current_players", 1),
                                         local_port=0,
                                         local_ip="",
-                                        last_seen=ts
+                                        last_seen=ts,
+                                        app_version=msg.get("version", "1.0.0")
                                     )
                     except Exception:
                         pass

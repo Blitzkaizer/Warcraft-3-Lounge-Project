@@ -81,5 +81,34 @@ class TestFriendManager(unittest.TestCase):
         self.assertEqual(invite.local_port, 54321)
         self.assertEqual(invite.local_ip, "192.168.1.50")
 
+    def test_nat_traversal_syn_signal(self):
+        syn_events = []
+        self.fm.on_nat_traversal_syn = lambda sender, pub_ip, pub_port, lan_ip, l_port, ver: syn_events.append({
+            "sender": sender,
+            "pub_ip": pub_ip,
+            "pub_port": pub_port,
+            "lan_ip": lan_ip,
+            "local_port": l_port,
+            "version": ver
+        })
+
+        import time
+        data = {
+            "type": "NAT_TRAVERSAL_SYN",
+            "from": "VegetaSama",
+            "client_pub_ip": "203.0.113.10",
+            "client_pub_port": 58921,
+            "client_lan_ip": "192.168.1.15",
+            "client_local_port": 58921,
+            "version": "1.0.1",
+            "ts": time.time()
+        }
+        self.fm._process_incoming_dict(data)
+        self.assertEqual(len(syn_events), 1)
+        self.assertEqual(syn_events[0]["sender"], "VegetaSama")
+        self.assertEqual(syn_events[0]["pub_ip"], "203.0.113.10")
+        self.assertEqual(syn_events[0]["pub_port"], 58921)
+        self.assertEqual(syn_events[0]["version"], "1.0.1")
+
 if __name__ == '__main__':
     unittest.main()

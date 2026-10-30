@@ -186,6 +186,50 @@ class NATPuncher:
 
         return any(t in self.connected_peers for t in targets)
 
+    def punch_toward_peer(
+        self,
+        target_ip: str,
+        target_port: int,
+        fallback_targets: Optional[List[Tuple[str, int]]] = None,
+        num_probes: int = 15
+    ) -> None:
+        """
+        Sends outbound PUNCH_PROBE packets toward an incoming client to pierce host's NAT firewall.
+        Enables simultaneous bidirectional hole punching for restricted cone NATs.
+        """
+        if not self.socket or not self._is_running:
+            return
+
+        targets: List[Tuple[str, int]] = [(target_ip, target_port)]
+        if fallback_targets:
+            for fb in fallback_targets:
+                if fb and fb not in targets:
+                    targets.append(fb)
+
+        probe_payload = self.room_secret + self.player_name.encode("utf-8")
+        probe_packet = SecureTunnelPacket.pack(
+            LoungeMessageType.PUNCH_PROBE,
+            probe_payload,
+            secret_key=self.secret_key
+        )
+
+        def _do_punch():
+            logger.info(f"[Host NAT Punch] Piercing outbound firewall toward joining peer: {targets}")
+            for _ in range(num_probes):
+                if not self._is_running:
+                    break
+                if any(t in self.connected_peers for t in targets):
+                    logger.info(f"[Host NAT Punch] Peer connected: {target_ip}:{target_port}")
+                    break
+                for t in targets:
+                    try:
+                        self.socket.sendto(probe_packet, t)
+                    except Exception as e:
+                        logger.debug(f"Host probe error to {t}: {e}")
+                time.sleep(0.1)
+
+        threading.Thread(target=_do_punch, name="Host-Punch-Thread", daemon=True).start()
+
     def broadcast_w3gs_to_peers(self, data: bytes) -> None:
         pkt = SecureTunnelPacket.pack(
             LoungeMessageType.W3GS_BROADCAST,

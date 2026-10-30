@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Warcraft III Lounge"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Warcraft III Lounge"
 #define MyAppURL "https://github.com/Warcraft3Lounge"
 #define MyAppExeName "Warcraft3Lounge.exe"

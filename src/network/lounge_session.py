@@ -101,13 +101,21 @@ class LoungeSession:
 
         return self.lounge_code
 
-    def join_lounge(self, code: str, local_port: int = 0, local_ip: str = "") -> bool:
+    def join_lounge(
+        self,
+        code: str,
+        local_port: int = 0,
+        local_ip: str = "",
+        host_username: str = "",
+        on_request_host_punch: Optional[Callable[[str, str, int, str, int], None]] = None
+    ) -> bool:
         """
         Joins an existing Lounge session:
         1. Decodes 64-bit secret, host IP, and port from code.
         2. Binds dynamic port and punches hole through router.
         3. Supports local candidates (127.0.0.1, LAN IP) for instant connection if peers are local.
-        4. Starts ClientTCPBridge on local 127.0.0.1:6112.
+        4. Signals host via HTTPS signaling so host punches back concurrently (Bidirectional NAT Traversal).
+        5. Starts ClientTCPBridge on local 127.0.0.1:6112.
         """
         self.is_host = False
         self._is_running = True
@@ -128,7 +136,9 @@ class LoungeSession:
             on_send_udp_chunk=self._on_client_send_tcp_to_host,
             on_stream_close=self._on_client_tcp_stream_close
         )
-        self.client_tcp_bridge.start()
+        if not self.client_tcp_bridge.start():
+            self._notify_status("Port 6112 is in use. Please close Warcraft III before joining.")
+            return False
 
         self.puncher = NATPuncher(
             player_name=self.player_name,
@@ -147,6 +157,17 @@ class LoungeSession:
             self._notify_status("Failed to initialize client network.")
             return False
 
+        # Simultaneous Bidirectional NAT Traversal: notify host so host firewall opens outbound
+        if host_username and on_request_host_punch and self.puncher.stun_result:
+            client_pub_ip = self.puncher.stun_result.public_ip
+            client_pub_port = self.puncher.stun_result.public_port
+            client_lan_ip = self.puncher.stun_result.local_ip
+            client_local_p = self.puncher.socket.getsockname()[1] if self.puncher.socket else 0
+            try:
+                on_request_host_punch(host_username, client_pub_ip, client_pub_port, client_lan_ip, client_local_p)
+            except Exception as e:
+                logger.debug(f"Failed to signal host for bidirectional punch: {e}")
+
         fallback_targets: List[Tuple[str, int]] = []
         if local_port:
             fallback_targets.append(("127.0.0.1", local_port))
@@ -162,6 +183,16 @@ class LoungeSession:
         punch_thread.start()
 
         return True
+
+    def punch_toward_peer(
+        self,
+        client_ip: str,
+        client_port: int,
+        fallback_targets: Optional[List[Tuple[str, int]]] = None
+    ) -> None:
+        """Called on Host to pierce outbound firewall when a client joins."""
+        if self.is_host and self.puncher:
+            self.puncher.punch_toward_peer(client_ip, client_port, fallback_targets=fallback_targets)
 
     def launch_game(self, extra_args: Optional[List[str]] = None) -> bool:
         logger.info(f"Triggering Warcraft III launch for '{self.player_name}'...")

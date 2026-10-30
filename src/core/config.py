@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 from typing import Any, Optional
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 # Default Warcraft III Classic ports & settings
 WC3_DEFAULT_PORT = 6112       # Standard WC3 LAN UDP discovery & TCP game hosting port
