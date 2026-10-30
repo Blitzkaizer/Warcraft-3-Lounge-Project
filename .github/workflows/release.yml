@@ -42,7 +42,7 @@ jobs:
       - name: Package Release Zip
         shell: powershell
         run: |
-          $Tag = "v1.0.2"
+          $Tag = "v1.0.3"
           $ZipName = "Warcraft3Lounge_Setup_${Tag}.zip"
           Compress-Archive -Path "dist\Warcraft3Lounge\*" -DestinationPath "dist\$ZipName" -Force
           Write-Host "Created release package: dist\$ZipName"
@@ -50,7 +50,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2
+          tag_name: v1.0.3
           files: |
             dist/Warcraft3Lounge_Setup_*.zip
             dist/Warcraft3Lounge_Portable.exe

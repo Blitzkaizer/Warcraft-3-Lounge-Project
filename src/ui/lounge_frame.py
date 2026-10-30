@@ -920,19 +920,6 @@ class LoungeFrame(ctk.CTkFrame):
         )
         self.host_game_btn.pack(side="left")
 
-        # Join by Code Button (Right next to Host Game)
-        self.join_code_btn = ctk.CTkButton(
-            browser_header,
-            text="🔗 Join by Code",
-            width=120,
-            height=32,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="#2c3e50",
-            hover_color="#34495e",
-            command=self._open_join_by_code_modal
-        )
-        self.join_code_btn.pack(side="left", padx=(8, 0))
-
         # Refresh button (Right)
         self.refresh_btn = ctk.CTkButton(
             browser_header,
@@ -1033,26 +1020,6 @@ class LoungeFrame(ctk.CTkFrame):
         """Opens full custom modal dialog to configure and host a game."""
         default_title = f"{self.current_user.username}'s Game"
         HostGameModal(self, default_title, on_host=self._start_hosting)
-
-    def _open_join_by_code_modal(self):
-        """Allows direct joining by entering or pasting a W3L- room code."""
-        dialog = ctk.CTkInputDialog(
-            text="Paste the Host's Room Code (starts with W3L-):\n\n(Tip: The Host can copy their code with 1 click inside their room!)",
-            title="🔗 Join Room by Code"
-        )
-        code = dialog.get_input()
-        if not code or not code.strip():
-            return
-        code = code.strip()
-        if not code.startswith("W3L-"):
-            messagebox.showerror("Invalid Code", "Room code must start with 'W3L-'. Please verify the code and try again.")
-            return
-        self.current_room_title = "Private Room"
-        threading.Thread(
-            target=self._async_join,
-            args=(code,),
-            daemon=True
-        ).start()
 
     def _build_active_room_ui(self):
         """Constructs the classic Garena Room Screen with Live Chat on Left & Player Table on Right."""
