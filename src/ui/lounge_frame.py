@@ -395,18 +395,19 @@ class LoungeFrame(ctk.CTkFrame):
         self.after(0, show)
 
     def _load_garena_assets(self):
-        """Loads authentic Garena icons and wide header graphic."""
-        self.wide_banner_raw = None
+        """Loads authentic Garena icons and DotA header graphic."""
+        self.banner_img = None
         self.sta_chat_img = None
         self.sta_battle_img = None
         self.start_dial_img = None
 
         try:
-            wide_path = _get_asset_path("garena_banner_wide.png")
-            if not wide_path.exists():
-                wide_path = _get_asset_path("garena_banner.png")
-            if wide_path.exists():
-                self.wide_banner_raw = Image.open(wide_path)
+            banner_path = _get_asset_path("garena_banner_1024.png")
+            if not banner_path.exists():
+                banner_path = _get_asset_path("garena_banner.png")
+            if banner_path.exists():
+                raw_b = Image.open(banner_path)
+                self.banner_img = ctk.CTkImage(light_image=raw_b, dark_image=raw_b, size=(1024, 87))
 
             chat_path = _get_asset_path("garena_sta_chat.png")
             if chat_path.exists():
@@ -425,38 +426,18 @@ class LoungeFrame(ctk.CTkFrame):
         except Exception as e:
             logger.debug(f"Failed to load Garena icons: {e}")
 
-    def _update_banner_width(self, event):
-        """Dynamically crops widescreen banner to seamlessly fill window width without distortion."""
-        if not self.wide_banner_raw:
-            return
-        w = max(getattr(event, "width", 1024), 600)
-        if abs(w - getattr(self, "_last_banner_w", 0)) < 15:
-            return
-        self._last_banner_w = w
-
-        bw, bh = self.wide_banner_raw.size
-        cx = bw // 2
-        left = max(0, cx - (w // 2))
-        right = min(bw, left + w)
-        if (right - left) < w:
-            left = max(0, right - w)
-
-        cropped = self.wide_banner_raw.crop((left, 0, right, bh))
-        self.banner_img = ctk.CTkImage(light_image=cropped, dark_image=cropped, size=(w, 87))
-        self.banner_lbl.configure(image=self.banner_img)
-
     def _build_ui(self):
-        # 1. Garena DotA Top Artwork Banner Frame (Full Width Widescreen)
-        self.banner_frame = ctk.CTkFrame(self, fg_color="#080b10", corner_radius=0, height=87)
+        # 1. Garena DotA Top Artwork Banner Frame (Fixed 1024x87 Classic)
+        self.banner_frame = ctk.CTkFrame(self, fg_color="#0e1217", corner_radius=0, height=87)
         self.banner_frame.pack(fill="x", side="top")
         self.banner_frame.pack_propagate(False)
 
-        self.banner_lbl = ctk.CTkLabel(self.banner_frame, text="")
+        self.banner_lbl = ctk.CTkLabel(
+            self.banner_frame,
+            text="",
+            image=self.banner_img if self.banner_img else None
+        )
         self.banner_lbl.pack(fill="both", expand=True)
-
-        if self.wide_banner_raw:
-            self.banner_frame.bind("<Configure>", self._update_banner_width)
-            self._update_banner_width(type("Event", (), {"width": 1024})())
 
         # 2. Garena Classic Navigation Bar (Clean Functional Tabs + User Stats + Actions)
         self.top_bar = ctk.CTkFrame(self, fg_color="#121822", height=42, corner_radius=0)

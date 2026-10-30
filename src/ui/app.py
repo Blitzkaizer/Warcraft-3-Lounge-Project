@@ -35,17 +35,18 @@ class W3LoungeApp(ctk.CTk):
         # Set Window Icon
         self._apply_app_icon()
 
-        # Window geometry persistence
-        saved_geo = load_setting("window_geometry")
-        if saved_geo:
-            try:
-                self.geometry(saved_geo)
-            except Exception:
-                self.geometry("1024x640")
-        else:
-            self.geometry("1024x640")
+        # Window geometry: native Garena classic dimensions (1024x620, non-resizable)
+        width, height = 1024, 620
+        try:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            pos_x = max(0, (screen_w - width) // 2)
+            pos_y = max(0, (screen_h - height) // 2)
+            self.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        except Exception:
+            self.geometry(f"{width}x{height}")
 
-        self.minsize(920, 560)
+        self.resizable(False, False)
 
         self.auth_manager = AuthManager()
         self.current_frame: Optional[ctk.CTkFrame] = None
@@ -106,7 +107,7 @@ class W3LoungeApp(ctk.CTk):
             current_user=user,
             on_logout=self._handle_logout
         )
-        self.current_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        self.current_frame.pack(fill="both", expand=True, padx=0, pady=0)
 
     def _handle_logout(self):
         if isinstance(self.current_frame, LoungeFrame):
