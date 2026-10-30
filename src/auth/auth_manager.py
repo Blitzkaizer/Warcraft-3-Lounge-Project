@@ -63,6 +63,8 @@ class AuthManager:
         self._ensure_config_dir()
 
         self.current_user: UserSession = self._load_saved_session()
+        if self.current_user.is_authenticated and self.current_user.access_token:
+            self._sync_user_metadata(self.current_user.access_token, self.current_user.username)
         self._start_token_refresh_watcher()
 
     def _ensure_config_dir(self) -> None:
@@ -362,6 +364,7 @@ class AuthManager:
                         self.current_user.refresh_token = new_refresh
                     self.current_user.expires_at = time.time() + float(expires_in)
                     self._save_session(self.current_user)
+                    self._sync_user_metadata(new_token, self.current_user.username)
                     logger.info("Successfully refreshed Supabase auth session token.")
                     return True
         except Exception as e:
