@@ -443,38 +443,26 @@ class LoungeFrame(ctk.CTkFrame):
         self.top_bar = ctk.CTkFrame(self, fg_color="#121822", height=42, corner_radius=0)
         self.top_bar.pack(fill="x", side="top", pady=(0, 2))
 
-        # Functional Garena Tabs (No dummy HOME tab)
-        self.tab_lobby_btn = ctk.CTkButton(
-            self.top_bar,
-            text="🌐 LOBBY",
-            width=90,
-            height=30,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            fg_color="#1e3799",
-            hover_color="#273c75",
-            command=lambda: self._switch_nav_tab("LOBBY")
-        )
-        self.tab_lobby_btn.pack(side="left", padx=(10, 4), pady=6)
-
-        self.tab_room_btn = ctk.CTkButton(
-            self.top_bar,
-            text="⚔️ ROOM",
-            width=90,
-            height=30,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            fg_color="#1a232f",
-            hover_color="#243343",
-            command=lambda: self._switch_nav_tab("ROOM")
-        )
-        self.tab_room_btn.pack(side="left", padx=4, pady=6)
-
+        # Garena Room Level & EXP Badge on the left
         self.room_lvl_badge = ctk.CTkLabel(
             self.top_bar,
-            text="⚔️ ROOM LVL: 1",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text="🔥 ROOM LVL: 1",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#f39c12"
         )
-        self.room_lvl_badge.pack(side="left", padx=12, pady=6)
+        self.room_lvl_badge.pack(side="left", padx=(14, 6), pady=6)
+
+        self.exp_badge = ctk.CTkLabel(
+            self.top_bar,
+            text="0%",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#0b0f15",
+            corner_radius=4,
+            padx=8,
+            pady=2,
+            text_color="#bdc3c7"
+        )
+        self.exp_badge.pack(side="left", padx=2, pady=6)
 
         # Right Bar Controls
         self.logout_btn = ctk.CTkButton(
@@ -630,23 +618,6 @@ class LoungeFrame(ctk.CTkFrame):
         self._build_active_room_ui()
 
         self.lobby_selection_frame.pack(fill="both", expand=True)
-
-    def _switch_nav_tab(self, tab: str):
-        """Switches top navigation view between Lobby and Active Room."""
-        if tab == "LOBBY":
-            self.tab_lobby_btn.configure(fg_color="#1e3799")
-            self.tab_room_btn.configure(fg_color="#1a232f")
-            self.active_room_frame.pack_forget()
-            self.lobby_selection_frame.pack(fill="both", expand=True)
-            self._refresh_rooms_list()
-        elif tab == "ROOM":
-            if self.session:
-                self.tab_room_btn.configure(fg_color="#1e3799")
-                self.tab_lobby_btn.configure(fg_color="#1a232f")
-                self.lobby_selection_frame.pack_forget()
-                self.active_room_frame.pack(fill="both", expand=True)
-            else:
-                self._open_host_modal()
 
     def _build_friends_panel(self):
         """Constructs left-hand Friends management pane with Garena styling."""
@@ -1326,8 +1297,6 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.active_room_frame.pack_forget()
         self.lobby_selection_frame.pack(fill="both", expand=True)
-        self.tab_lobby_btn.configure(fg_color="#1e3799")
-        self.tab_room_btn.configure(fg_color="#1a232f")
         self._refresh_rooms_list()
 
     def _add_player_card(self, username: str, is_self: bool = False, is_host: bool = False, initial_text: Optional[str] = None):
