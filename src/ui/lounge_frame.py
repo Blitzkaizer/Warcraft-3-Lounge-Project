@@ -400,6 +400,10 @@ class LoungeFrame(ctk.CTkFrame):
         self.sta_chat_img = None
         self.sta_battle_img = None
         self.start_dial_img = None
+        self.start_btn_img = None
+        self.start_btn_hover_img = None
+        self.start_btn_dis_img = None
+        self.start_btn_act_img = None
 
         try:
             banner_path = _get_asset_path("garena_banner_1024.png")
@@ -423,6 +427,26 @@ class LoungeFrame(ctk.CTkFrame):
             if dial_path.exists():
                 raw_dial = Image.open(dial_path)
                 self.start_dial_img = ctk.CTkImage(light_image=raw_dial, dark_image=raw_dial, size=(26, 26))
+
+            start_path = _get_asset_path("garena_start_btn.png")
+            if start_path.exists():
+                raw_start = Image.open(start_path)
+                self.start_btn_img = ctk.CTkImage(light_image=raw_start, dark_image=raw_start, size=(70, 73))
+
+            hover_path = _get_asset_path("garena_start_btn_hover.png")
+            if hover_path.exists():
+                raw_hover = Image.open(hover_path)
+                self.start_btn_hover_img = ctk.CTkImage(light_image=raw_hover, dark_image=raw_hover, size=(70, 73))
+
+            dis_path = _get_asset_path("garena_start_btn_disabled.png")
+            if dis_path.exists():
+                raw_dis = Image.open(dis_path)
+                self.start_btn_dis_img = ctk.CTkImage(light_image=raw_dis, dark_image=raw_dis, size=(70, 73))
+
+            act_path = _get_asset_path("garena_start_btn_launching.png")
+            if act_path.exists():
+                raw_act = Image.open(act_path)
+                self.start_btn_act_img = ctk.CTkImage(light_image=raw_act, dark_image=raw_act, size=(70, 73))
         except Exception as e:
             logger.debug(f"Failed to load Garena icons: {e}")
 
@@ -918,30 +942,52 @@ class LoungeFrame(ctk.CTkFrame):
         self.players_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 6))
 
         # ----------------- BOTTOM: Garena START GAME Bar -----------------
-        self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=6, height=52)
+        self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=6, height=80)
         self.room_actions.pack(fill="x", pady=(2, 0))
+        self.room_actions.pack_propagate(False)
 
-        # Host START GAME button (Big Metallic Garena Style with Authentic Power Dial Icon)
-        self.start_game_btn = ctk.CTkButton(
+        # Host Console Status Label
+        self.host_status_label = ctk.CTkLabel(
             self.room_actions,
-            text="  START GAME (Launch All Players)",
-            image=self.start_dial_img,
-            compound="left",
-            height=42,
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-            fg_color="#27ae60",
-            hover_color="#219150",
-            command=self._handle_start_game
+            text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#bdc3c7"
         )
-        self.start_game_btn.pack(side="left", fill="x", expand=True, padx=10, pady=6)
+        self.host_status_label.pack(side="left", padx=16)
 
         # Client Waiting Status Badge
         self.client_waiting_badge = ctk.CTkLabel(
             self.room_actions,
-            text="⏳ Waiting for Host to Launch Game...",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text="⏳ Waiting for Host to Launch Game... (Warcraft III will launch automatically)",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#f1c40f"
         )
+
+        # Pixel-Perfect Blue Garena START Button
+        self.start_game_btn = ctk.CTkButton(
+            self.room_actions,
+            text="",
+            image=self.start_btn_img,
+            width=70,
+            height=73,
+            border_spacing=0,
+            fg_color="transparent",
+            hover_color="#182334",
+            corner_radius=4,
+            command=self._handle_start_game
+        )
+        self.start_game_btn.pack(side="right", padx=12, pady=3)
+
+        def _on_btn_enter(e):
+            if self.start_game_btn.cget("state") == "normal" and getattr(self, "start_btn_hover_img", None):
+                self.start_game_btn.configure(image=self.start_btn_hover_img)
+
+        def _on_btn_leave(e):
+            if self.start_game_btn.cget("state") == "normal" and getattr(self, "start_btn_img", None):
+                self.start_game_btn.configure(image=self.start_btn_img)
+
+        self.start_game_btn.bind("<Enter>", _on_btn_enter)
+        self.start_game_btn.bind("<Leave>", _on_btn_leave)
 
     def _clear_chat(self):
         """Clears the room chat display."""
@@ -973,9 +1019,13 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.start_game_btn.configure(
             state="disabled",
-            text="🚀 Launching Warcraft III...",
-            fg_color="#e67e22"
+            image=getattr(self, "start_btn_act_img", self.start_btn_img)
         )
+        if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
+            self.host_status_label.configure(
+                text="🚀 Launching Warcraft III for all room players...",
+                text_color="#e67e22"
+            )
         self.session.start_game_for_all()
 
         # Re-enable button after 5 seconds so host is never permanently locked out
@@ -983,10 +1033,12 @@ class LoungeFrame(ctk.CTkFrame):
             if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
                 self.start_game_btn.configure(
                     state="normal",
-                    text="  Re-Launch Match",
-                    image=self.start_dial_img,
-                    fg_color="#27ae60",
-                    hover_color="#219150"
+                    image=getattr(self, "start_btn_img", None)
+                )
+            if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
+                self.host_status_label.configure(
+                    text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
+                    text_color="#bdc3c7"
                 )
         self.after(5000, reenable_launch)
 
@@ -1048,10 +1100,12 @@ class LoungeFrame(ctk.CTkFrame):
                     if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
                         self.start_game_btn.configure(
                             state="normal",
-                            text="  START GAME (Launch All Players)",
-                            image=self.start_dial_img,
-                            fg_color="#27ae60",
-                            hover_color="#219150"
+                            image=self.start_btn_img
+                        )
+                    if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
+                        self.host_status_label.configure(
+                            text="🎮 Warcraft III is Running! (Click START to launch again if needed)",
+                            text_color="#2ecc71"
                         )
                     if hasattr(self, "match_card") and self.match_card.winfo_exists():
                         self.match_card.configure(fg_color="#1e3799")
@@ -1115,7 +1169,13 @@ class LoungeFrame(ctk.CTkFrame):
                         if username not in self.player_rows:
                             self._add_player_card(username, is_self=False, is_host=False)
 
-                self.start_game_btn.pack(fill="x", expand=True)
+                self.start_game_btn.pack(side="right", padx=12, pady=3)
+                if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
+                    self.host_status_label.pack(side="left", padx=16)
+                    self.host_status_label.configure(
+                        text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
+                        text_color="#bdc3c7"
+                    )
                 self.client_waiting_badge.pack_forget()
 
                 self.lobby_selection_frame.pack_forget()
@@ -1247,7 +1307,9 @@ class LoungeFrame(ctk.CTkFrame):
                             self._add_player_card(username, is_self=False, is_host=is_host_peer)
 
                 self.start_game_btn.pack_forget()
-                self.client_waiting_badge.pack(fill="x", expand=True)
+                if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
+                    self.host_status_label.pack_forget()
+                self.client_waiting_badge.pack(side="left", padx=16)
 
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
@@ -1283,10 +1345,12 @@ class LoungeFrame(ctk.CTkFrame):
         if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
             self.start_game_btn.configure(
                 state="normal",
-                text="  START GAME (Launch All Players)",
-                image=self.start_dial_img,
-                fg_color="#27ae60",
-                hover_color="#219150"
+                image=self.start_btn_img
+            )
+        if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
+            self.host_status_label.configure(
+                text="⚔️ Host Console: Click START when all players are ready to launch Warcraft III",
+                text_color="#bdc3c7"
             )
 
         for child in self.players_scroll.winfo_children():
