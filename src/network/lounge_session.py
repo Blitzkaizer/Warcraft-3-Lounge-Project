@@ -52,6 +52,8 @@ class LoungeSession:
         self.on_player_ready_changed: Optional[Callable[[str, bool], None]] = None
         self.on_player_kicked: Optional[Callable[[str], None]] = None
         self.on_kicked_by_host: Optional[Callable[[], None]] = None
+        self.on_player_in_game_changed: Optional[Callable[[str, bool], None]] = None
+        self.on_host_closed_game: Optional[Callable[[], None]] = None
 
     def start_host(self) -> Optional[str]:
         """
@@ -204,13 +206,39 @@ class LoungeSession:
         logger.info(f"Triggering Warcraft III launch for '{self.player_name}'...")
         success = self.launcher.launch(extra_args)
 
-        if success and self.on_game_launched:
-            self.on_game_launched()
+        if success:
+            if self.on_game_launched:
+                self.on_game_launched()
 
-        if self.is_host and self.puncher:
-            self.puncher.send_event_to_peers("CMD:LAUNCH")
+            # Broadcast that this player is actively in game
+            if self.puncher:
+                self.puncher.send_event_to_peers(f"CMD:IN_GAME:1:{self.player_name}")
+            if self.on_player_in_game_changed:
+                self.on_player_in_game_changed(self.player_name, True)
+
+            # Monitor process exit in background to sync close across peers
+            def _monitor_exit():
+                while self._is_running:
+                    time.sleep(1.0)
+                    if not self.launcher.is_running():
+                        logger.info(f"Warcraft III process for '{self.player_name}' exited.")
+                        if self.is_host and self.puncher:
+                            self.puncher.send_event_to_peers("CMD:HOST_CLOSED_GAME")
+                        if self.puncher:
+                            self.puncher.send_event_to_peers(f"CMD:IN_GAME:0:{self.player_name}")
+                        if self.on_player_in_game_changed:
+                            self.on_player_in_game_changed(self.player_name, False)
+                        break
+
+                threading.Thread(target=_monitor_exit, daemon=True, name="WC3ExitMonitor").start()
 
         return success
+
+    def notify_match_created(self, map_name: str = ""):
+        """Host announces that map lobby was created inside WC3 so clients auto-launch."""
+        if self.is_host and self.puncher:
+            logger.info(f"Host created match '{map_name}' in WC3! Triggering client auto-launch...")
+            self.puncher.send_event_to_peers(f"CMD:MATCH_CREATED:{map_name}")
 
     def _host_announce_loop(self):
         while self._is_running:
@@ -307,9 +335,34 @@ class LoungeSession:
 
     def _handle_event(self, event_text: str):
         self._notify_status(f"Room Event: {event_text}")
-        if event_text == "CMD:LAUNCH":
-            logger.info("Host initiated game launch! Auto-launching local Warcraft III...")
-            self.launch_game()
+        if event_text in ("CMD:LAUNCH",) or event_text.startswith("CMD:MATCH_CREATED:"):
+            if not self.is_host:
+                logger.info(f"Host match ready ({event_text})! Auto-launching local Warcraft III...")
+                self.launch_game()
+        elif event_text == "CMD:HOST_PREPARING_MAP":
+            if not self.is_host:
+                logger.info("Host is selecting map in Warcraft III. Waiting for map lobby creation...")
+                self._notify_status("Host is selecting map... Warcraft III will launch automatically once lobby is ready.")
+        elif event_text == "CMD:HOST_CLOSED_GAME":
+            logger.info("Host closed Warcraft III. Closing local game process...")
+            self.launcher.terminate_game()
+            time.sleep(0.5)
+            is_still_running = self.launcher.is_running()
+            val = "1" if is_still_running else "0"
+            if self.puncher:
+                self.puncher.send_event_to_peers(f"CMD:IN_GAME:{val}:{self.player_name}")
+            if self.on_player_in_game_changed:
+                self.on_player_in_game_changed(self.player_name, is_still_running)
+            if self.on_host_closed_game:
+                self.on_host_closed_game()
+        elif event_text.startswith("CMD:IN_GAME:"):
+            # Format: CMD:IN_GAME:<0|1>:<username>
+            parts = event_text.split(":")
+            if len(parts) >= 4:
+                is_in_game = (parts[2] == "1")
+                username = parts[3]
+                if self.on_player_in_game_changed:
+                    self.on_player_in_game_changed(username, is_in_game)
         elif event_text.startswith("CMD:READY:"):
             # Format: CMD:READY:<0|1>:<username>
             parts = event_text.split(":")
@@ -366,10 +419,19 @@ class LoungeSession:
             self.puncher.send_chat_message(message)
 
     def start_game_for_all(self):
-        """Broadcasts launch command to all peers and launches host game."""
-        if self.puncher:
-            self.puncher.send_event_to_peers("CMD:LAUNCH")
-        self.launch_game()
+        """Host launches WC3 first; clients auto-launch once map is created."""
+        if self.is_host:
+            # 1. Host opens WC3 to create map
+            self.launch_game()
+            if self.puncher:
+                self.puncher.send_event_to_peers("CMD:HOST_PREPARING_MAP")
+
+            # Fallback guardrail: If host creates match or 18s elapse, ensure clients launch
+            def _fallback_client_launch():
+                time.sleep(18.0)
+                if self._is_running and self.puncher:
+                    self.puncher.send_event_to_peers("CMD:LAUNCH")
+            threading.Thread(target=_fallback_client_launch, daemon=True, name="ClientLaunchFallback").start()
 
     def _handle_peer_ping(self, peer_name: str, rtt_ms: float):
         if self.on_peer_ping:

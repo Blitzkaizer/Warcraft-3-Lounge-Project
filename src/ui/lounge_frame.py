@@ -200,6 +200,128 @@ class PrivateChatDialog(ctk.CTkToplevel):
                 pass
         self.destroy()
 
+class ToolTip:
+    """Lightweight tooltip that displays on widget hover."""
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.widget.bind("<Enter>", self.show_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                tw, text=self.text, justify="left",
+                background="#1c2833", foreground="#f1c40f",
+                relief="solid", borderwidth=1,
+                font=("Segoe UI", 9, "bold"), padx=6, pady=3
+            )
+            label.pack()
+        except Exception:
+            pass
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
+class ConnectingModal(ctk.CTkToplevel):
+    """
+    Modal overlay displayed on Client while connecting to a game room:
+    - Locks out any competing actions (hosting, clicking other invites).
+    - Shows dynamic connection progress and auto-dismisses on P2P link.
+    """
+
+    def __init__(self, master, host_name: str, on_cancel: Optional[Callable[[], None]] = None):
+        super().__init__(master)
+        self.on_cancel = on_cancel
+        self._is_cancelled = False
+        self.title("Connecting to Room")
+        self.geometry("380x200")
+        self.resizable(False, False)
+        self.configure(fg_color="#121822")
+        self.transient(master)
+        self.grab_set()
+
+        try:
+            self.update_idletasks()
+            pw = master.winfo_width()
+            ph = master.winfo_height()
+            px = master.winfo_rootx()
+            py = master.winfo_rooty()
+            w, h = 380, 200
+            x = px + (pw - w) // 2
+            y = py + (ph - h) // 2
+            self.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        card = ctk.CTkFrame(self, fg_color="#18202c", corner_radius=10)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+
+        self.title_lbl = ctk.CTkLabel(
+            card,
+            text=f"Connecting to {host_name}'s Room",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#00d2d3"
+        )
+        self.title_lbl.pack(pady=(18, 6))
+
+        self.status_lbl = ctk.CTkLabel(
+            card,
+            text="Establishing direct P2P link...",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#bdc3c7"
+        )
+        self.status_lbl.pack(pady=(0, 14))
+
+        self.prog_bar = ctk.CTkProgressBar(card, mode="indeterminate", width=260, height=8, progress_color="#27ae60")
+        self.prog_bar.pack(pady=(0, 16))
+        self.prog_bar.start()
+
+        self.cancel_btn = ctk.CTkButton(
+            card,
+            text="Cancel",
+            width=100,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#7f8c8d",
+            hover_color="#95a5a6",
+            command=self._handle_cancel
+        )
+        self.cancel_btn.pack(pady=(0, 10))
+
+    def update_status(self, text: str):
+        if self.winfo_exists():
+            self.status_lbl.configure(text=text)
+
+    def _handle_cancel(self):
+        self._is_cancelled = True
+        if self.on_cancel:
+            self.on_cancel()
+        self.close()
+
+    def close(self):
+        try:
+            self.prog_bar.stop()
+            self.grab_release()
+            self.destroy()
+        except Exception:
+            pass
+
+
 class HostGameModal(ctk.CTkToplevel):
     """
     Dedicated Host Game configuration dialog:
@@ -542,6 +664,7 @@ class LoungeFrame(ctk.CTkFrame):
         self.current_room_title: str = "Warcraft III Lounge"
         self._is_polling_rooms = True
         self._active_pm_dialogs: dict = {}
+        self.connecting_modal: Optional[ConnectingModal] = None
 
         # Load Garena authentic graphical icons and wide banner
         self._load_garena_assets()
@@ -1322,6 +1445,15 @@ class LoungeFrame(ctk.CTkFrame):
         self.after(0, update)
 
     def _start_hosting(self, title: str, max_players: int = 10, password: str = ""):
+        from ..launcher.game_launcher import GameLauncher
+        if GameLauncher.is_wc3_running_on_system():
+            messagebox.showerror(
+                "Warcraft III Running",
+                "Warcraft III is already open.\n\n"
+                "Please close Warcraft III first, then click 'Host Game'. (The Lounge will launch Warcraft III automatically when you click START in the room.)"
+            )
+            return
+
         self.create_lounge_btn = None
         self.current_room_title = title
         threading.Thread(target=self._async_host, args=(title, max_players, password), daemon=True).start()
@@ -1338,6 +1470,8 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.on_player_ready_changed = self._on_player_ready_changed_callback
         self.session.on_player_kicked = self._on_player_kicked_callback
         self.session.on_kicked_by_host = self._on_kicked_by_host_callback
+        self.session.on_player_in_game_changed = self._on_player_in_game_changed_callback
+        self.session.on_host_closed_game = self._on_host_closed_game_callback
 
         code = self.session.start_host()
 
@@ -1434,8 +1568,46 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.session.punch_toward_peer(client_pub_ip, client_pub_port, fallback_targets=fallbacks)
 
+    def _show_connecting_modal(self, host_name: str):
+        self._close_connecting_modal()
+        try:
+            self.connecting_modal = ConnectingModal(
+                master=self.winfo_toplevel(),
+                host_name=host_name,
+                on_cancel=self._handle_cancel_join
+            )
+        except Exception as e:
+            logger.warning(f"Could not display connecting modal: {e}")
+
+    def _close_connecting_modal(self):
+        if getattr(self, "connecting_modal", None):
+            try:
+                self.connecting_modal.close()
+            except Exception:
+                pass
+            self.connecting_modal = None
+
+    def _handle_cancel_join(self):
+        logger.info("Join cancelled by user via ConnectingModal.")
+        if self.session:
+            try:
+                self.session.shutdown()
+            except Exception:
+                pass
+            self.session = None
+        self._close_connecting_modal()
+
     def _join_public_room(self, room: LobbyRoom):
         """1-Click Join from Public Lobby Browser with password check."""
+        from ..launcher.game_launcher import GameLauncher
+        if GameLauncher.is_wc3_running_on_system():
+            messagebox.showerror(
+                "Warcraft III Running",
+                "Warcraft III is already open.\n\n"
+                "Please close Warcraft III first, then click 'Join Game'. (The app will automatically launch Warcraft III for you when the host starts the game.)"
+            )
+            return
+
         if room.is_locked:
             import hashlib
             dialog = ctk.CTkInputDialog(
@@ -1451,6 +1623,7 @@ class LoungeFrame(ctk.CTkFrame):
                 return
 
         self.current_room_title = room.title
+        self._show_connecting_modal(host_name=room.host_username)
         threading.Thread(
             target=self._async_join,
             args=(room.lounge_code, room.local_port, room.local_ip, room.host_username, room.app_version),
@@ -1486,6 +1659,7 @@ class LoungeFrame(ctk.CTkFrame):
         from ..core.tcp_tunnel import ClientTCPBridge
         if ClientTCPBridge.is_port_in_use(WC3_DEFAULT_PORT):
             def port_err():
+                self._close_connecting_modal()
                 messagebox.showerror(
                     "Port Conflict",
                     "Warcraft III port 6112 is already in use by another program or Warcraft III.\n\n"
@@ -1505,6 +1679,8 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.on_player_ready_changed = self._on_player_ready_changed_callback
         self.session.on_player_kicked = self._on_player_kicked_callback
         self.session.on_kicked_by_host = self._on_kicked_by_host_callback
+        self.session.on_player_in_game_changed = self._on_player_in_game_changed_callback
+        self.session.on_host_closed_game = self._on_host_closed_game_callback
 
         def _send_punch_syn(h_user, c_ip, c_port, c_lan, c_lport):
             self.friend_manager.send_nat_traversal_syn(h_user, c_ip, c_port, c_lan, c_lport)
@@ -1518,6 +1694,9 @@ class LoungeFrame(ctk.CTkFrame):
         )
 
         def update():
+            self._close_connecting_modal()
+            if not self.session:
+                return  # Connection was cancelled by the user
             if success:
                 self.room_title_label.configure(text=f"🎮 Room: {self.current_room_title}")
                 self.match_card.configure(fg_color="#1e3799")
@@ -1559,7 +1738,7 @@ class LoungeFrame(ctk.CTkFrame):
                 else:
                     messagebox.showerror(
                         "Join Failed",
-                        "Could not connect to host. The room code may be invalid, or network initialization timed out."
+                        f"Could not connect to {host_username or 'Host'}.\n\nThe host may have left or router blocked connection."
                     )
 
         self.after(0, update)
@@ -1860,13 +2039,24 @@ class LoungeFrame(ctk.CTkFrame):
         )
         rank_lbl.pack(side="right", padx=6, pady=3)
 
+        # 6. Yellow In-Game Dot Indicator (shown if player is still running WC3 after host exits)
+        in_game_dot = ctk.CTkLabel(
+            row,
+            text="🟡",
+            width=20,
+            font=ctk.CTkFont(size=11),
+            text_color="#f1c40f"
+        )
+        ToolTip(in_game_dot, "Player is still in the game")
+
         self.player_rows[username] = {
             "row": row,
             "ping": ping_lbl,
             "sta": sta_lbl,
             "lvl": lvl_lbl,
             "name": name_lbl,
-            "rank": rank_lbl
+            "rank": rank_lbl,
+            "in_game_dot": in_game_dot
         }
 
         # Right-click kick menu for Host to Kick non-host players
@@ -1956,6 +2146,10 @@ class LoungeFrame(ctk.CTkFrame):
         self.after(0, update)
 
     def _on_match_detected_callback(self, match_name, open_slots, total_slots):
+        # Notify clients if host created match so their game auto-launches
+        if self.session and self.session.is_host:
+            self.session.notify_match_created(match_name)
+
         def update():
             self.match_card.configure(fg_color="#27ae60")
             self.match_card_label.configure(
@@ -1967,6 +2161,39 @@ class LoungeFrame(ctk.CTkFrame):
                         p_dict["sta"].configure(image=self.sta_battle_img, text="")
                     else:
                         p_dict["sta"].configure(text="⚔️")
+                except Exception:
+                    pass
+        self.after(0, update)
+
+    def _on_player_in_game_changed_callback(self, username: str, is_in_game: bool):
+        def update():
+            target_key = None
+            for key in self.player_rows.keys():
+                if key.lower().strip() == username.lower().strip():
+                    target_key = key
+                    break
+            if target_key and "in_game_dot" in self.player_rows[target_key]:
+                dot = self.player_rows[target_key]["in_game_dot"]
+                rank_lbl = self.player_rows[target_key]["rank"]
+                if is_in_game:
+                    if not dot.winfo_ismapped():
+                        dot.pack(side="right", padx=(0, 4), before=rank_lbl)
+                else:
+                    if dot.winfo_ismapped():
+                        dot.pack_forget()
+        self.after(0, update)
+
+    def _on_host_closed_game_callback(self):
+        def update():
+            self._append_chat("System", "👑 Host closed Warcraft III. Closing your game and returning to room...")
+            self.match_card.configure(fg_color="#1e3799")
+            self.match_card_label.configure(text="Match ended by Host. Ready for next match!")
+            for p_dict in self.player_rows.values():
+                try:
+                    if self.sta_chat_img:
+                        p_dict["sta"].configure(image=self.sta_chat_img, text="")
+                    else:
+                        p_dict["sta"].configure(text="💬")
                 except Exception:
                     pass
         self.after(0, update)
@@ -2236,7 +2463,18 @@ class LoungeFrame(ctk.CTkFrame):
         invite = self.active_invite
         self.invite_banner.pack_forget()
         self.active_invite = None
+
+        from ..launcher.game_launcher import GameLauncher
+        if GameLauncher.is_wc3_running_on_system():
+            messagebox.showerror(
+                "Warcraft III Running",
+                "Warcraft III is already open.\n\n"
+                "Please close Warcraft III first, then accept the invite. (The app will automatically launch Warcraft III for you when the host starts the game.)"
+            )
+            return
+
         self.current_room_title = f"{invite.host_username}'s Game"
+        self._show_connecting_modal(host_name=invite.host_username)
         self.lobby_service.stop_hosting_room()
         if self.session:
             try:

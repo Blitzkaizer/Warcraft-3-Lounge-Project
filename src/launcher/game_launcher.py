@@ -108,6 +108,52 @@ class GameLauncher:
         """Checks if launched game process is still active."""
         if self.process is not None:
             return self.process.poll() is None
+        return self.is_wc3_running_on_system()
+
+    @staticmethod
+    def is_wc3_running_on_system() -> bool:
+        """Checks if war3.exe or Frozen Throne.exe is running anywhere on the Windows system."""
+        if sys.platform != "win32":
+            return False
+        try:
+            out = subprocess.check_output(
+                ["tasklist", "/NH", "/FO", "CSV"],
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                errors="ignore"
+            )
+            out_lower = out.lower()
+            return ("war3.exe" in out_lower) or ("frozen throne.exe" in out_lower)
+        except Exception:
+            return False
+
+    def terminate_game(self) -> bool:
+        """Gracefully terminates the running Warcraft III process."""
+        if self.process is not None and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=2.0)
+                logger.info("Terminated local Warcraft III process.")
+                return True
+            except Exception:
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
+        # Fallback taskkill on Windows
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "war3.exe", "/IM", "Frozen Throne.exe"],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                logger.info("Closed Warcraft III via taskkill.")
+                return True
+            except Exception:
+                pass
         return False
 
     @staticmethod

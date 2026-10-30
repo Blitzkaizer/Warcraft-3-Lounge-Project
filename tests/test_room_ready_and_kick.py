@@ -79,3 +79,53 @@ class TestRoomReadyAndKick:
         box.stop_glow()
         assert not box.is_glowing
         root.destroy()
+
+    def test_in_game_event_dispatch(self):
+        session = LoungeSession(is_host=True, player_name="HostPlayer")
+        mock_in_game_cb = MagicMock()
+        session.on_player_in_game_changed = mock_in_game_cb
+
+        # Handle incoming in_game signal 1 and 0
+        session._handle_event("CMD:IN_GAME:1:ClientBob")
+        mock_in_game_cb.assert_called_once_with("ClientBob", True)
+
+        mock_in_game_cb.reset_mock()
+        session._handle_event("CMD:IN_GAME:0:ClientBob")
+        mock_in_game_cb.assert_called_once_with("ClientBob", False)
+
+    def test_host_closed_game_event_dispatch(self):
+        session = LoungeSession(is_host=False, player_name="ClientBob")
+        session.launcher = MagicMock()
+        session.launcher.is_running.return_value = False
+        session.puncher = MagicMock()
+        mock_host_closed_cb = MagicMock()
+        mock_in_game_cb = MagicMock()
+        session.on_host_closed_game = mock_host_closed_cb
+        session.on_player_in_game_changed = mock_in_game_cb
+
+        session._handle_event("CMD:HOST_CLOSED_GAME")
+
+        session.launcher.terminate_game.assert_called_once()
+        session.puncher.send_event_to_peers.assert_called_with("CMD:IN_GAME:0:ClientBob")
+        mock_host_closed_cb.assert_called_once()
+        mock_in_game_cb.assert_called_once_with("ClientBob", False)
+
+    def test_smart_map_launch_flow(self):
+        session = LoungeSession(is_host=False, player_name="ClientBob")
+        session.launch_game = MagicMock()
+        session._notify_status = MagicMock()
+
+        # 1. Host is preparing map -> Client does NOT launch yet
+        session._handle_event("CMD:HOST_PREPARING_MAP")
+        session.launch_game.assert_not_called()
+
+        # 2. Match is created by Host -> Client auto-launches!
+        session._handle_event("CMD:MATCH_CREATED:DotA 5v5")
+        session.launch_game.assert_called_once()
+
+    def test_host_notify_match_created(self):
+        host_session = LoungeSession(is_host=True, player_name="HostPlayer")
+        host_session.puncher = MagicMock()
+
+        host_session.notify_match_created("Footmen Frenzy")
+        host_session.puncher.send_event_to_peers.assert_called_once_with("CMD:MATCH_CREATED:Footmen Frenzy")

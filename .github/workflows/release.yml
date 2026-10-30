@@ -39,18 +39,24 @@ jobs:
           python -m PyInstaller Warcraft3Lounge.spec --noconfirm
           python -m PyInstaller Warcraft3Lounge_Portable.spec --noconfirm
 
+      - name: Determine Version
+        shell: powershell
+        run: |
+          $ver = (Select-String -Path "src\core\config.py" -Pattern 'APP_VERSION\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+          "RELEASE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_TAG=v$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Package Release Zip
         shell: powershell
         run: |
-          $Tag = "v1.0.3"
-          $ZipName = "Warcraft3Lounge_Setup_${Tag}.zip"
+          $ZipName = "Warcraft3Lounge_Setup_${{ env.RELEASE_TAG }}.zip"
           Compress-Archive -Path "dist\Warcraft3Lounge\*" -DestinationPath "dist\$ZipName" -Force
           Write-Host "Created release package: dist\$ZipName"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.3
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/Warcraft3Lounge_Setup_*.zip
             dist/Warcraft3Lounge_Portable.exe
