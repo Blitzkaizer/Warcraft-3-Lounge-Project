@@ -903,22 +903,6 @@ class LoungeFrame(ctk.CTkFrame):
         )
         self.chat_send_btn.pack(side="right")
 
-        # Chat Action Toolbar (Garena style: Clear Chat)
-        chat_bar = ctk.CTkFrame(chat_panel, fg_color="transparent")
-        chat_bar.pack(fill="x", padx=6, pady=(0, 6))
-
-        clear_btn = ctk.CTkButton(
-            chat_bar,
-            text="🗑️ Clear Chat",
-            width=85,
-            height=24,
-            font=ctk.CTkFont(size=10),
-            fg_color="#2c3e50",
-            hover_color="#34495e",
-            command=self._clear_chat
-        )
-        clear_btn.pack(side="left")
-
         # ----------------- RIGHT: Garena Player Table -----------------
         players_panel = ctk.CTkFrame(self.room_split, fg_color="#0c1017", corner_radius=6)
         players_panel.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
@@ -948,20 +932,9 @@ class LoungeFrame(ctk.CTkFrame):
         self.room_actions.pack(fill="x", pady=(2, 0))
         self.room_actions.pack_propagate(False)
 
-        # Host Console Status Label
-        self.host_status_label = ctk.CTkLabel(
-            self.room_actions,
-            text="⚔️ Host Console: Waiting for players to check Ready",
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            text_color="#bdc3c7"
-        )
-        self.host_status_label.pack(side="left", padx=16)
-
-        # Client Action Box (Ready Checkbox + Waiting Label)
-        self.client_action_box = ctk.CTkFrame(self.room_actions, fg_color="transparent")
-
+        # Ready to Play Checkbox (Always visible on left of bottom dock)
         self.ready_checkbox = ctk.CTkCheckBox(
-            self.client_action_box,
+            self.room_actions,
             text=" Ready to Play",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#2ecc71",
@@ -971,15 +944,24 @@ class LoungeFrame(ctk.CTkFrame):
             border_width=2,
             command=self._handle_ready_toggle
         )
-        self.ready_checkbox.pack(side="left", padx=(6, 12))
+        self.ready_checkbox.pack(side="left", padx=(16, 12))
 
+        # Host Console Status Label
+        self.host_status_label = ctk.CTkLabel(
+            self.room_actions,
+            text="⚔️ Host Console: Waiting for players to check Ready",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#bdc3c7"
+        )
+        self.host_status_label.pack(side="left", padx=8)
+
+        # Client Waiting Status Badge
         self.client_waiting_badge = ctk.CTkLabel(
-            self.client_action_box,
+            self.room_actions,
             text="⏳ Waiting for Host to Launch Game... (Warcraft III will launch automatically)",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#f1c40f"
         )
-        self.client_waiting_badge.pack(side="left")
 
         # Pixel-Perfect Blue Garena START Button
         self.start_game_btn = ctk.CTkButton(
@@ -1194,10 +1176,15 @@ class LoungeFrame(ctk.CTkFrame):
                             self._add_player_card(username, is_self=False, is_host=False)
 
                 self.start_game_btn.pack(side="right", padx=12, pady=3)
+                if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
+                    self.ready_checkbox.pack(side="left", padx=(16, 12))
+                    self.ready_checkbox.select()
+                    self.is_self_ready = True
+                    self.player_readiness[self.current_user.username] = True
                 if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
-                    self.host_status_label.pack(side="left", padx=16)
-                if hasattr(self, "client_action_box") and self.client_action_box.winfo_exists():
-                    self.client_action_box.pack_forget()
+                    self.host_status_label.pack(side="left", padx=8)
+                if hasattr(self, "client_waiting_badge") and self.client_waiting_badge.winfo_exists():
+                    self.client_waiting_badge.pack_forget()
 
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
@@ -1334,11 +1321,13 @@ class LoungeFrame(ctk.CTkFrame):
                 self.start_game_btn.pack_forget()
                 if hasattr(self, "host_status_label") and self.host_status_label.winfo_exists():
                     self.host_status_label.pack_forget()
-                if hasattr(self, "client_action_box") and self.client_action_box.winfo_exists():
-                    self.client_action_box.pack(side="left", padx=16)
                 if hasattr(self, "ready_checkbox") and self.ready_checkbox.winfo_exists():
+                    self.ready_checkbox.pack(side="left", padx=(16, 12))
                     self.ready_checkbox.deselect()
-                self.is_self_ready = False
+                    self.is_self_ready = False
+                    self.player_readiness[self.current_user.username] = False
+                if hasattr(self, "client_waiting_badge") and self.client_waiting_badge.winfo_exists():
+                    self.client_waiting_badge.pack(side="left", padx=8)
 
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
@@ -1400,7 +1389,7 @@ class LoungeFrame(ctk.CTkFrame):
         self._refresh_rooms_list()
 
     def _handle_ready_toggle(self):
-        """Client toggles 'Ready to Play' checkbox."""
+        """Toggles 'Ready to Play' checkbox for self."""
         self.is_self_ready = bool(self.ready_checkbox.get())
         self.player_readiness[self.current_user.username] = self.is_self_ready
         if self.session:
@@ -1411,9 +1400,17 @@ class LoungeFrame(ctk.CTkFrame):
         # Update self status in player roster
         if self.current_user.username in self.player_rows:
             entry = self.player_rows[self.current_user.username]
-            color = "#2ecc71" if self.is_self_ready else "#95a5a6"
-            txt = "🟢 READY" if self.is_self_ready else "⚪ NOT READY"
+            is_host = (self.session.is_host if self.session else False)
+            if is_host:
+                color = "#2ecc71" if self.is_self_ready else "#f39c12"
+                txt = "👑 READY" if self.is_self_ready else "👑 Host"
+            else:
+                color = "#2ecc71" if self.is_self_ready else "#95a5a6"
+                txt = "🟢 READY" if self.is_self_ready else "⚪ NOT READY"
             entry["rank"].configure(text=txt, text_color=color)
+
+        if self.session and self.session.is_host:
+            self._update_start_button_state()
 
     def _on_player_ready_changed_callback(self, username: str, is_ready: bool):
         """Called when a player toggles ready."""
@@ -1439,6 +1436,17 @@ class LoungeFrame(ctk.CTkFrame):
     def _update_start_button_state(self):
         """Updates host START button state and status message based on peer readiness."""
         if not self.session or not self.session.is_host:
+            return
+
+        if not self.is_self_ready:
+            self.start_game_btn.configure(
+                state="disabled",
+                image=getattr(self, "start_btn_dis_img", self.start_btn_img)
+            )
+            self.host_status_label.configure(
+                text="⚠️ You are NOT READY. Check 'Ready to Play' • Right-click START to force launch",
+                text_color="#f39c12"
+            )
             return
 
         non_host_players = [
@@ -1610,8 +1618,9 @@ class LoungeFrame(ctk.CTkFrame):
 
         # 5. Status / Readiness (Host or Ready/Not Ready)
         if is_host:
-            status_text = "👑 Host"
-            status_color = "#f39c12"
+            ready_state = self.player_readiness.get(username, True)
+            status_text = "👑 READY" if ready_state else "👑 Host"
+            status_color = "#2ecc71" if ready_state else "#f39c12"
         else:
             ready_state = self.player_readiness.get(username, False)
             status_text = "🟢 READY" if ready_state else "⚪ NOT READY"
