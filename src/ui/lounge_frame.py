@@ -330,6 +330,9 @@ class LoungeFrame(ctk.CTkFrame):
         self._is_polling_rooms = True
         self._active_pm_dialogs: dict = {}
 
+        # Load Garena authentic graphical icons and wide banner
+        self._load_garena_assets()
+
         self._build_ui()
         self._refresh_game_path_ui()
         self._refresh_friends_list()
@@ -391,62 +394,98 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.after(0, show)
 
+    def _load_garena_assets(self):
+        """Loads authentic Garena icons and wide header graphic."""
+        self.wide_banner_raw = None
+        self.sta_chat_img = None
+        self.sta_battle_img = None
+        self.start_dial_img = None
+
+        try:
+            wide_path = _get_asset_path("garena_banner_wide.png")
+            if not wide_path.exists():
+                wide_path = _get_asset_path("garena_banner.png")
+            if wide_path.exists():
+                self.wide_banner_raw = Image.open(wide_path)
+
+            chat_path = _get_asset_path("garena_sta_chat.png")
+            if chat_path.exists():
+                raw_chat = Image.open(chat_path)
+                self.sta_chat_img = ctk.CTkImage(light_image=raw_chat, dark_image=raw_chat, size=(20, 16))
+
+            battle_path = _get_asset_path("garena_sta_battle.png")
+            if battle_path.exists():
+                raw_battle = Image.open(battle_path)
+                self.sta_battle_img = ctk.CTkImage(light_image=raw_battle, dark_image=raw_battle, size=(20, 16))
+
+            dial_path = _get_asset_path("garena_power_dial.png")
+            if dial_path.exists():
+                raw_dial = Image.open(dial_path)
+                self.start_dial_img = ctk.CTkImage(light_image=raw_dial, dark_image=raw_dial, size=(26, 26))
+        except Exception as e:
+            logger.debug(f"Failed to load Garena icons: {e}")
+
+    def _update_banner_width(self, event):
+        """Dynamically crops widescreen banner to seamlessly fill window width without distortion."""
+        if not self.wide_banner_raw:
+            return
+        w = max(getattr(event, "width", 1024), 600)
+        if abs(w - getattr(self, "_last_banner_w", 0)) < 15:
+            return
+        self._last_banner_w = w
+
+        bw, bh = self.wide_banner_raw.size
+        cx = bw // 2
+        left = max(0, cx - (w // 2))
+        right = min(bw, left + w)
+        if (right - left) < w:
+            left = max(0, right - w)
+
+        cropped = self.wide_banner_raw.crop((left, 0, right, bh))
+        self.banner_img = ctk.CTkImage(light_image=cropped, dark_image=cropped, size=(w, 87))
+        self.banner_lbl.configure(image=self.banner_img)
+
     def _build_ui(self):
-        # 1. Garena DotA Top Artwork Banner Frame
-        self.banner_frame = ctk.CTkFrame(self, fg_color="#080b10", corner_radius=0, height=88)
+        # 1. Garena DotA Top Artwork Banner Frame (Full Width Widescreen)
+        self.banner_frame = ctk.CTkFrame(self, fg_color="#080b10", corner_radius=0, height=87)
         self.banner_frame.pack(fill="x", side="top")
         self.banner_frame.pack_propagate(False)
 
-        banner_path = _get_asset_path("garena_banner.png")
-        if banner_path.exists():
-            try:
-                raw_banner = Image.open(banner_path)
-                self.banner_img = ctk.CTkImage(light_image=raw_banner, dark_image=raw_banner, size=(660, 88))
-                self.banner_lbl = ctk.CTkLabel(self.banner_frame, image=self.banner_img, text="")
-                self.banner_lbl.pack(expand=True)
-            except Exception as e:
-                logger.debug(f"Could not load banner: {e}")
+        self.banner_lbl = ctk.CTkLabel(self.banner_frame, text="")
+        self.banner_lbl.pack(fill="both", expand=True)
 
-        # 2. Garena Classic Navigation Bar (Tabs + User Stats + Actions)
+        if self.wide_banner_raw:
+            self.banner_frame.bind("<Configure>", self._update_banner_width)
+            self._update_banner_width(type("Event", (), {"width": 1024})())
+
+        # 2. Garena Classic Navigation Bar (Clean Functional Tabs + User Stats + Actions)
         self.top_bar = ctk.CTkFrame(self, fg_color="#121822", height=42, corner_radius=0)
         self.top_bar.pack(fill="x", side="top", pady=(0, 2))
 
-        # Garena Tabs
-        self.tab_home_btn = ctk.CTkButton(
-            self.top_bar,
-            text="HOME",
-            width=65,
-            height=30,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            fg_color="#1a232f",
-            hover_color="#243343",
-            command=lambda: self._switch_nav_tab("LOBBY")
-        )
-        self.tab_home_btn.pack(side="left", padx=(10, 3), pady=6)
-
+        # Functional Garena Tabs (No dummy HOME tab)
         self.tab_lobby_btn = ctk.CTkButton(
             self.top_bar,
-            text="LOBBY",
-            width=70,
+            text="🌐 LOBBY",
+            width=90,
             height=30,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#1e3799",
             hover_color="#273c75",
             command=lambda: self._switch_nav_tab("LOBBY")
         )
-        self.tab_lobby_btn.pack(side="left", padx=3, pady=6)
+        self.tab_lobby_btn.pack(side="left", padx=(10, 4), pady=6)
 
         self.tab_room_btn = ctk.CTkButton(
             self.top_bar,
-            text="ROOM",
-            width=70,
+            text="⚔️ ROOM",
+            width=90,
             height=30,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#1a232f",
             hover_color="#243343",
             command=lambda: self._switch_nav_tab("ROOM")
         )
-        self.tab_room_btn.pack(side="left", padx=3, pady=6)
+        self.tab_room_btn.pack(side="left", padx=4, pady=6)
 
         self.room_lvl_badge = ctk.CTkLabel(
             self.top_bar,
@@ -499,15 +538,15 @@ class LoungeFrame(ctk.CTkFrame):
         )
         self.user_label.pack(side="right", padx=(8, 4), pady=6)
 
-        # 3. Game Path Sub-Bar (Garena Sub-Tab Style)
-        self.path_bar = ctk.CTkFrame(self, fg_color="#0e131a", height=28, corner_radius=0)
+        # 3. Game Path Sub-Bar (Compact Sleek Sub-Header)
+        self.path_bar = ctk.CTkFrame(self, fg_color="#0e131a", height=26, corner_radius=0)
         self.path_bar.pack(fill="x", padx=0, pady=(0, 6))
 
         self.path_label = ctk.CTkLabel(
             self.path_bar,
             text="Warcraft III Path: Detecting...",
             font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color="#7f8c8d",
+            text_color="#95a5a6",
             anchor="w"
         )
         self.path_label.pack(side="left", fill="x", expand=True, padx=12)
@@ -516,7 +555,7 @@ class LoungeFrame(ctk.CTkFrame):
             self.path_bar,
             text="📁 Browse Executable",
             width=130,
-            height=22,
+            height=20,
             font=ctk.CTkFont(size=10, weight="bold"),
             fg_color="#2c3e50",
             hover_color="#34495e",
@@ -616,7 +655,6 @@ class LoungeFrame(ctk.CTkFrame):
         if tab == "LOBBY":
             self.tab_lobby_btn.configure(fg_color="#1e3799")
             self.tab_room_btn.configure(fg_color="#1a232f")
-            self.tab_home_btn.configure(fg_color="#1a232f")
             self.active_room_frame.pack_forget()
             self.lobby_selection_frame.pack(fill="both", expand=True)
             self._refresh_rooms_list()
@@ -624,7 +662,6 @@ class LoungeFrame(ctk.CTkFrame):
             if self.session:
                 self.tab_room_btn.configure(fg_color="#1e3799")
                 self.tab_lobby_btn.configure(fg_color="#1a232f")
-                self.tab_home_btn.configure(fg_color="#1a232f")
                 self.lobby_selection_frame.pack_forget()
                 self.active_room_frame.pack(fill="both", expand=True)
             else:
@@ -930,11 +967,13 @@ class LoungeFrame(ctk.CTkFrame):
         self.room_actions = ctk.CTkFrame(self.active_room_frame, fg_color="#101826", corner_radius=6, height=52)
         self.room_actions.pack(fill="x", pady=(2, 0))
 
-        # Host START GAME button (Big Metallic Garena Style)
+        # Host START GAME button (Big Metallic Garena Style with Authentic Power Dial Icon)
         self.start_game_btn = ctk.CTkButton(
             self.room_actions,
-            text="🚀 START GAME (Launch All Players)",
-            height=40,
+            text="  START GAME (Launch All Players)",
+            image=self.start_dial_img,
+            compound="left",
+            height=42,
             font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
             fg_color="#27ae60",
             hover_color="#219150",
@@ -990,7 +1029,8 @@ class LoungeFrame(ctk.CTkFrame):
             if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
                 self.start_game_btn.configure(
                     state="normal",
-                    text="🚀 Re-Launch Match",
+                    text="  Re-Launch Match",
+                    image=self.start_dial_img,
                     fg_color="#27ae60",
                     hover_color="#219150"
                 )
@@ -1011,6 +1051,15 @@ class LoungeFrame(ctk.CTkFrame):
                     self.match_card_label.configure(
                         text="Host launched game! Head straight to Local Area Network (LAN) tab in Warcraft III."
                     )
+
+            for p_dict in self.player_rows.values():
+                try:
+                    if self.sta_battle_img:
+                        p_dict["sta"].configure(image=self.sta_battle_img, text="")
+                    else:
+                        p_dict["sta"].configure(text="⚔️")
+                except Exception:
+                    pass
 
             # Auto-minimize Lounge to true Windows System Tray
             def auto_minimize_tray():
@@ -1045,7 +1094,8 @@ class LoungeFrame(ctk.CTkFrame):
                     if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
                         self.start_game_btn.configure(
                             state="normal",
-                            text="🚀 START GAME (Launch All Players)",
+                            text="  START GAME (Launch All Players)",
+                            image=self.start_dial_img,
                             fg_color="#27ae60",
                             hover_color="#219150"
                         )
@@ -1279,7 +1329,8 @@ class LoungeFrame(ctk.CTkFrame):
         if hasattr(self, "start_game_btn") and self.start_game_btn.winfo_exists():
             self.start_game_btn.configure(
                 state="normal",
-                text="🚀 START GAME (Launch All Players)",
+                text="  START GAME (Launch All Players)",
+                image=self.start_dial_img,
                 fg_color="#27ae60",
                 hover_color="#219150"
             )
@@ -1315,8 +1366,11 @@ class LoungeFrame(ctk.CTkFrame):
         row = ctk.CTkFrame(self.players_scroll, fg_color="#141a24", corner_radius=4, height=30)
         row.pack(fill="x", pady=2, padx=2)
 
-        # 1. STA Icon (Status: 💬 chatting or ⚔️ in-game)
-        sta_lbl = ctk.CTkLabel(row, text="💬", width=30, font=ctk.CTkFont(size=12))
+        # 1. STA Icon (Status: authentic Garena chat bubble or battle swords)
+        if self.sta_chat_img:
+            sta_lbl = ctk.CTkLabel(row, image=self.sta_chat_img, text="", width=30)
+        else:
+            sta_lbl = ctk.CTkLabel(row, text="💬", width=30, font=ctk.CTkFont(size=12))
         sta_lbl.pack(side="left", padx=2, pady=3)
 
         # 2. Lvl (Host = 25, Client = 1)
@@ -1445,7 +1499,10 @@ class LoungeFrame(ctk.CTkFrame):
             )
             for p_dict in self.player_rows.values():
                 try:
-                    p_dict["sta"].configure(text="⚔️")
+                    if self.sta_battle_img:
+                        p_dict["sta"].configure(image=self.sta_battle_img, text="")
+                    else:
+                        p_dict["sta"].configure(text="⚔️")
                 except Exception:
                     pass
         self.after(0, update)
