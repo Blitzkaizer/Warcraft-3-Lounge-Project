@@ -950,6 +950,13 @@ class LoungeFrame(ctk.CTkFrame):
             text_color="#f1c40f"
         )
 
+    def _clear_chat(self):
+        """Clears the room chat display."""
+        if hasattr(self, "chat_display") and self.chat_display.winfo_exists():
+            self.chat_display.configure(state="normal")
+            self.chat_display.delete("1.0", "end")
+            self.chat_display.configure(state="disabled")
+
     def _send_room_chat(self):
         msg = self.chat_entry.get().strip()
         if not msg:
