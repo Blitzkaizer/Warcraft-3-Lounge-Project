@@ -40,7 +40,8 @@ class NATPuncher:
         on_event: Optional[Callable[[str], None]] = None,
         on_peer_ping: Optional[Callable[[str, float], None]] = None,
         on_peer_disconnected: Optional[Callable[[Tuple[str, int], str], None]] = None,
-        on_chat_message: Optional[Callable[[str, str], None]] = None
+        on_chat_message: Optional[Callable[[str, str], None]] = None,
+        on_peer_reconnecting: Optional[Callable[[Tuple[str, int], str], None]] = None
     ):
         self.bind_port = bind_port
         self.player_name = player_name
@@ -55,6 +56,7 @@ class NATPuncher:
         self.on_peer_ping = on_peer_ping
         self.on_peer_disconnected = on_peer_disconnected
         self.on_chat_message = on_chat_message
+        self.on_peer_reconnecting = on_peer_reconnecting
 
         self.socket: Optional[socket.socket] = None
         self.stun_result: Optional[STUNResult] = None
@@ -65,6 +67,7 @@ class NATPuncher:
         self.connected_peers: Dict[Tuple[str, int], float] = {}
         self.peer_names: Dict[Tuple[str, int], str] = {}
         self.peer_rtt: Dict[Tuple[str, int], float] = {}
+        self.reconnecting_peers: Set[Tuple[str, int]] = set()
         self.unauthorized_dropped = 0
 
         # Rate Limiting: IP -> list of recent timestamps
@@ -452,15 +455,27 @@ class NATPuncher:
             )
 
             for peer, last_seen in list(self.connected_peers.items()):
-                if now - last_seen > 8.0:
-                    peer_name = self.peer_names.get(peer, f"{peer[0]}:{peer[1]}")
-                    logger.warning(f"Peer '{peer_name}' ({peer[0]}:{peer[1]}) timed out. Removing.")
-                    del self.connected_peers[peer]
-                    if peer in self.peer_rtt:
-                        del self.peer_rtt[peer]
+                peer_name = self.peer_names.get(peer, f"{peer[0]}:{peer[1]}")
+                time_since_seen = now - last_seen
+                if time_since_seen > 16.0:
+                    logger.warning(f"Peer '{peer_name}' ({peer[0]}:{peer[1]}) dropped after 16s timeout.")
+                    self.connected_peers.pop(peer, None)
+                    self.peer_rtt.pop(peer, None)
+                    self.reconnecting_peers.discard(peer)
                     if self.on_peer_disconnected:
                         self.on_peer_disconnected(peer, peer_name)
+                elif time_since_seen > 5.0:
+                    if peer not in self.reconnecting_peers:
+                        self.reconnecting_peers.add(peer)
+                        logger.info(f"Peer '{peer_name}' experiencing network jitter. Buffering reconnecting state...")
+                        if self.on_peer_reconnecting:
+                            self.on_peer_reconnecting(peer, peer_name)
+                    try:
+                        self.socket.sendto(ping_pkt, peer)
+                    except Exception:
+                        pass
                 else:
+                    self.reconnecting_peers.discard(peer)
                     try:
                         self.socket.sendto(ping_pkt, peer)
                     except Exception:

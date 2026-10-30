@@ -153,6 +153,119 @@ class PrivateChatDialog(ctk.CTkToplevel):
                 pass
         self.destroy()
 
+class HostGameModal(ctk.CTkToplevel):
+    """
+    Dedicated Host Game configuration dialog:
+    - Custom Game Title (e.g. DotA 5v5 - AP, Legion TD, Melee 1v1)
+    - Max Player Slots (2 to 12)
+    - Optional Room Password
+    """
+
+    def __init__(self, master, default_title: str, on_host: Callable[[str, int, str], None]):
+        super().__init__(master)
+        self.on_host = on_host
+        self.title("🎮 Host Warcraft III Match")
+        self.geometry("440x380")
+        self.minsize(400, 340)
+        self.configure(fg_color="#18191c")
+        self.grab_set()
+
+        # Header
+        header = ctk.CTkFrame(self, fg_color="#202225", corner_radius=0, height=50)
+        header.pack(fill="x", side="top")
+        header.pack_propagate(False)
+
+        ctk.CTkLabel(
+            header,
+            text="⚔️ Create Game Lobby",
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color="#ffffff"
+        ).pack(side="left", padx=16, pady=8)
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        # 1. Game Title
+        ctk.CTkLabel(body, text="Match Title:", font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w", pady=(0, 4))
+        self.title_entry = ctk.CTkEntry(body, placeholder_text="e.g. DotA 5v5 AP, Legion TD 4v4", height=34)
+        self.title_entry.insert(0, default_title)
+        self.title_entry.pack(fill="x", pady=(0, 12))
+
+        # 2. Max Players
+        ctk.CTkLabel(body, text="Max Players:", font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w", pady=(0, 4))
+        self.slots_menu = ctk.CTkOptionMenu(
+            body,
+            values=["2 Players", "4 Players", "6 Players", "8 Players", "10 Players", "12 Players"],
+            height=34,
+            fg_color="#2f3136",
+            button_color="#5865f2",
+            button_hover_color="#4752c4"
+        )
+        self.slots_menu.set("10 Players")
+        self.slots_menu.pack(fill="x", pady=(0, 12))
+
+        # 3. Password Checkbox + Entry
+        self.has_pw_var = ctk.BooleanVar(value=False)
+        self.pw_checkbox = ctk.CTkCheckBox(
+            body,
+            text="🔒 Private Room (Password Protected)",
+            variable=self.has_pw_var,
+            command=self._toggle_pw
+        )
+        self.pw_checkbox.pack(anchor="w", pady=(0, 6))
+
+        self.pw_entry = ctk.CTkEntry(
+            body,
+            placeholder_text="Enter room password...",
+            show="*",
+            height=34
+        )
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", side="bottom", padx=20, pady=(0, 18))
+
+        cancel_btn = ctk.CTkButton(
+            btn_frame,
+            text="Cancel",
+            width=90,
+            height=36,
+            fg_color="#4f545c",
+            hover_color="#36393f",
+            command=self.destroy
+        )
+        cancel_btn.pack(side="left")
+
+        host_btn = ctk.CTkButton(
+            btn_frame,
+            text="🚀 Create Lobby",
+            height=36,
+            fg_color="#27ae60",
+            hover_color="#219150",
+            font=ctk.CTkFont(weight="bold", size=13),
+            command=self._confirm
+        )
+        host_btn.pack(side="right", fill="x", expand=True, padx=(10, 0))
+
+        self.title_entry.focus_set()
+
+    def _toggle_pw(self):
+        if self.has_pw_var.get():
+            self.pw_entry.pack(fill="x", pady=(0, 8), before=self.pw_checkbox)
+            self.pw_entry.focus_set()
+        else:
+            self.pw_entry.pack_forget()
+
+    def _confirm(self):
+        title = self.title_entry.get().strip()
+        if not title:
+            return
+        slots_str = self.slots_menu.get().split()[0]
+        max_players = int(slots_str) if slots_str.isdigit() else 10
+        password = self.pw_entry.get().strip() if self.has_pw_var.get() else ""
+        self.destroy()
+        self.on_host(title, max_players, password)
+
 class LoungeFrame(ctk.CTkFrame):
     """Primary application dashboard for Warcraft III Lounge (GameRanger Experience)."""
 
@@ -188,6 +301,50 @@ class LoungeFrame(ctk.CTkFrame):
 
         # Start live lobby browser polling
         self._start_lobby_polling()
+
+        # Check for GitHub releases in the background
+        from ..core.update_checker import check_for_updates_async
+        check_for_updates_async(on_update_available=self._show_update_banner)
+
+    def _show_update_banner(self, latest_tag: str, release_url: str):
+        def show():
+            banner = ctk.CTkFrame(self, fg_color="#1b4f72", corner_radius=8, height=40)
+            banner.pack(fill="x", padx=15, pady=(8, 0), before=self.top_bar)
+            banner.pack_propagate(False)
+
+            msg = ctk.CTkLabel(
+                banner,
+                text=f"🚀 Update Available: {latest_tag} is ready for download!",
+                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+                text_color="#ffffff"
+            )
+            msg.pack(side="left", padx=12, pady=6)
+
+            close_btn = ctk.CTkButton(
+                banner,
+                text="✕",
+                width=24,
+                height=24,
+                fg_color="transparent",
+                hover_color="#154360",
+                command=banner.destroy
+            )
+            close_btn.pack(side="right", padx=6, pady=6)
+
+            import webbrowser
+            download_btn = ctk.CTkButton(
+                banner,
+                text="Download Update",
+                width=120,
+                height=26,
+                fg_color="#27ae60",
+                hover_color="#219150",
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                command=lambda: webbrowser.open(release_url)
+            )
+            download_btn.pack(side="right", padx=6, pady=6)
+
+        self.after(0, show)
 
     def _build_ui(self):
         # 1. Top Bar: User info + Logout
@@ -472,7 +629,8 @@ class LoungeFrame(ctk.CTkFrame):
             row = ctk.CTkFrame(self.rooms_scroll, fg_color=("gray92", "#242424"), corner_radius=6, height=42)
             row.pack(fill="x", pady=3)
 
-            title_lbl = ctk.CTkLabel(row, text=f"⚔️ {r.title}", font=ctk.CTkFont(weight="bold", size=13), anchor="w")
+            room_title = f"🔒 {r.title}" if r.is_locked else f"⚔️ {r.title}"
+            title_lbl = ctk.CTkLabel(row, text=room_title, font=ctk.CTkFont(weight="bold", size=13), anchor="w")
             title_lbl.pack(side="left", fill="x", expand=True, padx=(12, 5), pady=8)
 
             host_lbl = ctk.CTkLabel(row, text=r.host_username, text_color="gray", width=100, anchor="w", font=ctk.CTkFont(size=12))
@@ -497,14 +655,9 @@ class LoungeFrame(ctk.CTkFrame):
         self._refresh_friends_list()
 
     def _open_host_modal(self):
-        """Opens quick modal dialog to host a game."""
-        dialog = ctk.CTkInputDialog(
-            text="Enter Game Title (e.g. DotA 5v5, Legion TD, Melee 1v1):",
-            title="Host Public Game"
-        )
-        title = dialog.get_input()
-        if title:
-            self._start_hosting(title.strip())
+        """Opens full custom modal dialog to configure and host a game."""
+        default_title = f"{self.current_user.username}'s Game"
+        HostGameModal(self, default_title, on_host=self._start_hosting)
 
     def _build_active_room_ui(self):
         """Constructs the GameRanger-style In-Room Screen with Live Chat & Launch button."""
@@ -710,17 +863,18 @@ class LoungeFrame(ctk.CTkFrame):
 
         self.after(0, update)
 
-    def _start_hosting(self, title: str):
+    def _start_hosting(self, title: str, max_players: int = 10, password: str = ""):
         self.create_lounge_btn = None
         self.current_room_title = title
-        threading.Thread(target=self._async_host, args=(title,), daemon=True).start()
+        threading.Thread(target=self._async_host, args=(title, max_players, password), daemon=True).start()
 
-    def _async_host(self, title: str):
+    def _async_host(self, title: str, max_players: int = 10, password: str = ""):
         self.session = LoungeSession(is_host=True, player_name=self.current_user.username)
         self.session.on_peer_joined = self._on_peer_joined_callback
         self.session.on_peer_left = self._on_peer_left_callback
         self.session.on_match_detected = self._on_match_detected_callback
         self.session.on_peer_ping = self._on_peer_ping_callback
+        self.session.on_peer_reconnecting = self._on_peer_reconnecting_callback
         self.session.on_chat_received = self._on_chat_received_callback
         self.session.on_game_launched = self._on_game_launched_callback
 
@@ -740,8 +894,10 @@ class LoungeFrame(ctk.CTkFrame):
                 self.lobby_service.start_hosting_room(
                     title=title,
                     room_code=code,
+                    max_players=max_players,
                     local_port=local_port,
-                    local_ip=local_ip
+                    local_ip=local_ip,
+                    password=password
                 )
 
                 self.room_title_label.configure(text=f"🎮 Room: {title} (Host: {self.current_user.username})")
@@ -766,6 +922,18 @@ class LoungeFrame(ctk.CTkFrame):
                 self.active_room_frame.pack(fill="both", expand=True)
                 self._append_chat("System", f"Room '{title}' created! Waiting for players to join.")
 
+        self.after(0, update)
+
+    def _on_peer_reconnecting_callback(self, username: str):
+        def update():
+            target_key = None
+            for key in self.player_rows.keys():
+                if key.lower().strip() == username.lower().strip():
+                    target_key = key
+                    break
+            if target_key:
+                row_data = self.player_rows[target_key]
+                row_data["ping"].configure(text="🟡 Reconnecting...", text_color="#f39c12")
         self.after(0, update)
 
     def _handle_incoming_nat_syn(
@@ -794,7 +962,21 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.punch_toward_peer(client_pub_ip, client_pub_port, fallback_targets=fallbacks)
 
     def _join_public_room(self, room: LobbyRoom):
-        """1-Click Join from Public Lobby Browser."""
+        """1-Click Join from Public Lobby Browser with password check."""
+        if room.is_locked:
+            import hashlib
+            dialog = ctk.CTkInputDialog(
+                text=f"Room '{room.title}' is private.\nEnter password to join:",
+                title="🔒 Password Required"
+            )
+            pw = dialog.get_input()
+            if pw is None:
+                return
+            entered_hash = hashlib.sha256(pw.strip().encode()).hexdigest()[:16]
+            if entered_hash != room.password_hash:
+                messagebox.showerror("Access Denied", "Incorrect room password. Please try again.")
+                return
+
         self.current_room_title = room.title
         threading.Thread(
             target=self._async_join,
@@ -835,6 +1017,7 @@ class LoungeFrame(ctk.CTkFrame):
         self.session.on_peer_left = self._on_peer_left_callback
         self.session.on_match_detected = self._on_match_detected_callback
         self.session.on_peer_ping = self._on_peer_ping_callback
+        self.session.on_peer_reconnecting = self._on_peer_reconnecting_callback
         self.session.on_chat_received = self._on_chat_received_callback
         self.session.on_game_launched = self._on_game_launched_callback
 
@@ -1176,6 +1359,12 @@ class LoungeFrame(ctk.CTkFrame):
             play_chat_sound()
             dialog = self._open_private_chat(sender)
             dialog.append_message(sender, text)
+            top = self.winfo_toplevel()
+            if hasattr(top, "tray_manager") and top.tray_manager:
+                top.tray_manager.show_notification(
+                    f"💬 Message from {sender}",
+                    text[:120]
+                )
         self.after(0, show)
 
     def _handle_add_friend(self):
@@ -1274,6 +1463,12 @@ class LoungeFrame(ctk.CTkFrame):
             self.invite_label.configure(text=f"🎮 {invite.host_username} invited you to play Warcraft III!")
             self.invite_banner.pack(fill="x", padx=15, pady=(0, 10), before=self.main_split)
             self.after(75000, self._decline_invite)
+            top = self.winfo_toplevel()
+            if hasattr(top, "tray_manager") and top.tray_manager:
+                top.tray_manager.show_notification(
+                    "🎮 Warcraft III Game Invite",
+                    f"{invite.host_username} invited you to play Warcraft III!"
+                )
         self.after(0, show)
 
     def _accept_invite(self):

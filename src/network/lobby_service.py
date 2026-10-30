@@ -29,6 +29,8 @@ class LobbyRoom:
     local_ip: str = ""
     last_seen: float = 0.0
     app_version: str = "1.0.0"
+    is_locked: bool = False
+    password_hash: str = ""
 
 class LobbyService:
     """
@@ -48,9 +50,11 @@ class LobbyService:
         room_code: str,
         max_players: int = 10,
         local_port: int = 0,
-        local_ip: str = ""
+        local_ip: str = "",
+        password: str = ""
     ) -> LobbyRoom:
         room_id = hashlib.sha256(f"{self.username}_{title}_{time.time()}".encode()).hexdigest()[:12]
+        pw_hash = hashlib.sha256(password.strip().encode()).hexdigest()[:16] if password.strip() else ""
         room = LobbyRoom(
             room_id=room_id,
             title=title.strip() or f"{self.username}'s Game",
@@ -60,7 +64,10 @@ class LobbyService:
             current_players=1,
             local_port=local_port,
             local_ip=local_ip,
-            last_seen=time.time()
+            last_seen=time.time(),
+            app_version=APP_VERSION,
+            is_locked=bool(pw_hash),
+            password_hash=pw_hash
         )
         self._current_hosted_room = room
         self._is_announcing = True
@@ -103,6 +110,8 @@ class LobbyService:
                 "max_players": room.max_players,
                 "current_players": room.current_players,
                 "version": APP_VERSION,
+                "is_locked": room.is_locked,
+                "password_hash": room.password_hash,
                 "ts": time.time()
             }).encode("utf-8")
             req = urllib.request.Request(url, data=payload, method="POST")
@@ -147,7 +156,9 @@ class LobbyService:
                                         local_port=0,
                                         local_ip="",
                                         last_seen=ts,
-                                        app_version=msg.get("version", "1.0.0")
+                                        app_version=msg.get("version", "1.0.0"),
+                                        is_locked=bool(msg.get("is_locked", False)),
+                                        password_hash=str(msg.get("password_hash", ""))
                                     )
                     except Exception:
                         pass

@@ -16,5 +16,12 @@ class TestLobbyService(unittest.TestCase):
         svc.stop_hosting_room()
         self.assertFalse(svc._is_announcing)
 
+    def test_lobby_room_password_protection(self):
+        svc = LobbyService(username="SecretHost")
+        room = svc.start_hosting_room("Private Clan Match", "W3L-SECRET", max_players=6, password="clanwar2026")
+        self.assertTrue(room.is_locked)
+        self.assertTrue(len(room.password_hash) > 0)
+        svc.stop_hosting_room()
+
 if __name__ == '__main__':
     unittest.main()

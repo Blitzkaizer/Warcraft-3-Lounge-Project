@@ -48,6 +48,7 @@ class LoungeSession:
         self.on_peer_ping: Optional[Callable[[str, float], None]] = None
         self.on_peer_left: Optional[Callable[[str], None]] = None
         self.on_chat_received: Optional[Callable[[str, str], None]] = None
+        self.on_peer_reconnecting: Optional[Callable[[str], None]] = None
 
     def start_host(self) -> Optional[str]:
         """
@@ -78,7 +79,8 @@ class LoungeSession:
             on_event=self._handle_event,
             on_peer_ping=self._handle_peer_ping,
             on_peer_disconnected=self._handle_peer_disconnected,
-            on_chat_message=self._handle_chat_message
+            on_chat_message=self._handle_chat_message,
+            on_peer_reconnecting=self._handle_peer_reconnecting
         )
 
         if not self.puncher.initialize():
@@ -150,7 +152,8 @@ class LoungeSession:
             on_event=self._handle_event,
             on_peer_ping=self._handle_peer_ping,
             on_peer_disconnected=self._handle_peer_disconnected,
-            on_chat_message=self._handle_chat_message
+            on_chat_message=self._handle_chat_message,
+            on_peer_reconnecting=self._handle_peer_reconnecting
         )
 
         if not self.puncher.initialize():
@@ -293,6 +296,11 @@ class LoungeSession:
         self._notify_status(f"Player '{username}' left the room.")
         if self.on_peer_left:
             self.on_peer_left(username)
+
+    def _handle_peer_reconnecting(self, peer: Tuple[str, int], username: str):
+        logger.info(f"Player '{username}' connection buffering / reconnecting...")
+        if self.on_peer_reconnecting:
+            self.on_peer_reconnecting(username)
 
     def _handle_event(self, event_text: str):
         self._notify_status(f"Room Event: {event_text}")

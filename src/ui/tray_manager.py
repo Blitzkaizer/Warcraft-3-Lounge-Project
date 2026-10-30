@@ -78,6 +78,14 @@ class TrayManager:
         except Exception as e:
             logger.debug(f"Tray loop error: {e}")
 
+    def show_notification(self, title: str, message: str):
+        """Displays a native Windows toast notification via the system tray."""
+        if self.icon and self._is_running:
+            try:
+                self.icon.notify(message, title)
+            except Exception as e:
+                logger.debug(f"Tray notification failed: {e}")
+
     def minimize_to_tray(self, notify: bool = False):
         """Hides window completely into system tray."""
         def hide():
