@@ -368,6 +368,9 @@ class LoungeFrame(ctk.CTkFrame):
             )
             join_btn.pack(side="right", padx=10, pady=6)
 
+        # Refresh friends list to reflect any friends now hosting rooms
+        self._refresh_friends_list()
+
     def _open_host_modal(self):
         """Opens quick modal dialog to host a game."""
         dialog = ctk.CTkInputDialog(
@@ -843,6 +846,16 @@ class LoungeFrame(ctk.CTkFrame):
             hover_color="#95a5a6" if new_muted else "#3498db"
         )
 
+    def _is_friend_online_or_hosting(self, friend_name: str) -> bool:
+        """Checks if a friend is online via signaling presence OR hosting a room in the browser."""
+        if self.friend_manager.is_friend_online(friend_name):
+            return True
+        f_clean = friend_name.lower().strip()
+        for room in self.lobby_service.active_rooms.values():
+            if room.host_username.lower().strip() == f_clean:
+                return True
+        return False
+
     # Friends List & Signaling Handlers
     def _refresh_friends_list(self):
         for child in self.friends_scroll.winfo_children():
@@ -864,16 +877,16 @@ class LoungeFrame(ctk.CTkFrame):
             row = ctk.CTkFrame(self.friends_scroll, fg_color=("gray90", "#2b2b2b"), corner_radius=6)
             row.pack(fill="x", pady=3, padx=2)
 
-            is_online = self.friend_manager.is_friend_online(friend)
-            dot_color = "#2ecc71" if is_online else "gray"
+            is_online = self._is_friend_online_or_hosting(friend)
             dot_char = "🟢" if is_online else "⚪"
-            status_tooltip = "Online" if is_online else "Offline"
+            dot_color = "#2ecc71" if is_online else "#7f8c8d"
 
             status_lbl = ctk.CTkLabel(
                 row,
                 text=dot_char,
-                font=ctk.CTkFont(size=11),
-                width=18
+                font=ctk.CTkFont(size=12),
+                text_color=dot_color,
+                width=20
             )
             status_lbl.pack(side="left", padx=(8, 2), pady=5)
 
@@ -885,24 +898,38 @@ class LoungeFrame(ctk.CTkFrame):
             )
             name_lbl.pack(side="left", fill="x", expand=True, padx=(2, 5), pady=5)
 
-            # 1-Click Invite Button (on the right)
-            invite_btn = ctk.CTkButton(
-                row,
-                text="Invite",
-                width=65,
-                height=26,
-                font=ctk.CTkFont(size=11, weight="bold"),
-                fg_color="#27ae60",
-                hover_color="#219150"
-            )
-            invite_btn.configure(command=lambda f=friend, b=invite_btn: self._handle_invite_friend(f, b))
+            # Invite Button: strictly enabled only if friend is online!
+            if is_online:
+                invite_btn = ctk.CTkButton(
+                    row,
+                    text="Invite",
+                    width=65,
+                    height=26,
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    fg_color="#27ae60",
+                    hover_color="#219150",
+                    state="normal"
+                )
+                invite_btn.configure(command=lambda f=friend, b=invite_btn: self._handle_invite_friend(f, b))
+            else:
+                invite_btn = ctk.CTkButton(
+                    row,
+                    text="Offline",
+                    width=65,
+                    height=26,
+                    font=ctk.CTkFont(size=11),
+                    fg_color=("#bdc3c7", "#3d3d3d"),
+                    text_color=("gray30", "gray70"),
+                    state="disabled"
+                )
             invite_btn.pack(side="right", padx=6, pady=5)
 
             # Right-click context menu on row & label to remove friend (no X button clutter)
             def show_friend_menu(event, f=friend, b=invite_btn):
                 menu = tk.Menu(self, tearoff=0)
-                menu.add_command(label=f"🎮 Invite '{f}'", command=lambda: self._handle_invite_friend(f, b))
-                menu.add_separator()
+                if self._is_friend_online_or_hosting(f):
+                    menu.add_command(label=f"🎮 Invite '{f}'", command=lambda: self._handle_invite_friend(f, b))
+                    menu.add_separator()
                 menu.add_command(label=f"❌ Remove Friend '{f}'", command=lambda: self._handle_remove_friend(f))
                 try:
                     menu.tk_popup(event.x_root, event.y_root)
